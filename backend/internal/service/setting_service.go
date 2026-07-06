@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -260,4 +261,53 @@ func (s *SettingService) getStringOrDefault(settings map[string]string, key, def
 		return value
 	}
 	return defaultValue
+}
+
+// GetBurnPromoteSettings 获取促消耗调度配置
+func (s *SettingService) GetBurnPromoteSettings(ctx context.Context) (*BurnPromoteSettings, error) {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyBurnPromoteSettings)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return DefaultBurnPromoteSettings(), nil
+		}
+		return nil, fmt.Errorf("get burn promote settings: %w", err)
+	}
+	if value == "" {
+		return DefaultBurnPromoteSettings(), nil
+	}
+	var settings BurnPromoteSettings
+	if err := json.Unmarshal([]byte(value), &settings); err != nil {
+		return DefaultBurnPromoteSettings(), nil
+	}
+	if settings.IntervalSeconds < 10 {
+		settings.IntervalSeconds = 10
+	}
+	if settings.IntervalSeconds > 3600 {
+		settings.IntervalSeconds = 3600
+	}
+	if settings.BatchSize < 1 {
+		settings.BatchSize = 1
+	}
+	if settings.BatchSize > 100 {
+		settings.BatchSize = 100
+	}
+	return &settings, nil
+}
+
+// SetBurnPromoteSettings 设置促消耗调度配置
+func (s *SettingService) SetBurnPromoteSettings(ctx context.Context, settings *BurnPromoteSettings) error {
+	if settings == nil {
+		return fmt.Errorf("settings cannot be nil")
+	}
+	if settings.IntervalSeconds < 10 || settings.IntervalSeconds > 3600 {
+		return fmt.Errorf("interval_seconds must be between 10 and 3600")
+	}
+	if settings.BatchSize < 1 || settings.BatchSize > 100 {
+		return fmt.Errorf("batch_size must be between 1 and 100")
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("marshal burn promote settings: %w", err)
+	}
+	return s.settingRepo.Set(ctx, SettingKeyBurnPromoteSettings, string(data))
 }

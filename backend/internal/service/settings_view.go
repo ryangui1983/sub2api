@@ -510,6 +510,18 @@ func DefaultRateLimit429CooldownSettings() *RateLimit429CooldownSettings {
 	}
 }
 
+// BurnPromoteSettings 促消耗调度配置
+type BurnPromoteSettings struct {
+	Enabled         bool `json:"enabled"`
+	IntervalSeconds int  `json:"interval_seconds"`
+	BatchSize       int  `json:"batch_size"`
+}
+
+// DefaultBurnPromoteSettings 返回默认配置（禁用，60秒，批次20）
+func DefaultBurnPromoteSettings() *BurnPromoteSettings {
+	return &BurnPromoteSettings{Enabled: false, IntervalSeconds: 60, BatchSize: 20}
+}
+
 // DefaultBetaPolicySettings 返回默认的 Beta 策略配置
 //
 // context-1m-2025-08-07 的默认策略：

@@ -230,17 +230,8 @@ func ProvideSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, se
 }
 
 // ProvideBurnPromoteService creates and starts BurnPromoteService.
-func ProvideBurnPromoteService(db *sql.DB, lockCache LeaderLockCache, cfg *config.Config) *BurnPromoteService {
-	enabled := cfg != nil && cfg.Gateway.BurnPromote.Enabled
-	interval := 60 * time.Second
-	if cfg != nil && cfg.Gateway.BurnPromote.IntervalSeconds > 0 {
-		interval = time.Duration(cfg.Gateway.BurnPromote.IntervalSeconds) * time.Second
-	}
-	batchSize := burnPromoteDefaultBatchSize
-	if cfg != nil && cfg.Gateway.BurnPromote.BatchSize > 0 {
-		batchSize = cfg.Gateway.BurnPromote.BatchSize
-	}
-	svc := NewBurnPromoteService(db, lockCache, interval, batchSize, enabled)
+func ProvideBurnPromoteService(db *sql.DB, lockCache LeaderLockCache, settingService *SettingService) *BurnPromoteService {
+	svc := NewBurnPromoteService(db, lockCache, settingService)
 	svc.Start()
 	return svc
 }

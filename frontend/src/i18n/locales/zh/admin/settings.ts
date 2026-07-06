@@ -921,6 +921,18 @@ export default {
         saved: '429 默认回避设置保存成功',
         saveFailed: '保存 429 默认回避设置失败'
       },
+      burnPromote: {
+        title: '促消耗调度',
+        description: '按5小时窗口用量动态调整账号优先级，用量高的账号优先承接请求以均衡消耗',
+        enabled: '启用促消耗调度',
+        enabledHint: '每个调度周期自动按用量排列账号优先级，冷却中账号优先级置最低',
+        intervalSeconds: '调度周期（秒）',
+        intervalSecondsHint: '两次优先级调整的间隔（10-3600 秒）',
+        batchSize: '批次大小',
+        batchSizeHint: '每个优先级批次包含的账号数（1-100）',
+        saved: '促消耗调度设置保存成功',
+        saveFailed: '保存促消耗调度设置失败'
+      },
       streamTimeout: {
         title: '流超时处理',
         description: '配置上游响应超时时的账户处理策略，避免问题账户持续被选中',
