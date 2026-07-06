@@ -75,6 +75,10 @@ func (s *OpenAIGatewayService) markOpenAIOAuth429RateLimited(ctx context.Context
 	if account.IsShadow() {
 		return
 	}
+	// 账号级绕过：ignore_429_cooldown 开启时跳过内存运行时阻塞，账号继续参与调度
+	if account.IsIgnore429CooldownEnabled() {
+		return
+	}
 	s.recordOpenAIOAuth429()
 
 	cooldownUntil := time.Now().Add(openAIOAuth429FallbackCooldown)

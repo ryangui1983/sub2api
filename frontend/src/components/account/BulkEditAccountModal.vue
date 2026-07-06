@@ -909,6 +909,43 @@
         </div>
       </div>
 
+      <!-- 忽略 429 冷却（所有平台） -->
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label id="bulk-edit-ignore429-label" class="input-label mb-0" for="bulk-edit-ignore429-enabled">
+              忽略 429 冷却
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              收到上游 429 时跳过冷却惩罚，账号继续参与调度（高风险）
+            </p>
+          </div>
+          <input
+            v-model="enableIgnore429Cooldown"
+            id="bulk-edit-ignore429-enabled"
+            type="checkbox"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div :class="!enableIgnore429Cooldown && 'pointer-events-none opacity-50'">
+          <button
+            type="button"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              ignore429CooldownEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+            @click="ignore429CooldownEnabled = !ignore429CooldownEnabled"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                ignore429CooldownEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <!-- OpenAI API Key WS mode -->
       <div v-if="allOpenAIAPIKey" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1409,6 +1446,8 @@ const enableOpenAIWSMode = ref(false)
 const enableOpenAIAPIKeyWSMode = ref(false)
 const enableCodexCLIOnly = ref(false)
 const enableCodexCLIOnlyAppServer = ref(false)
+const enableIgnore429Cooldown = ref(false)
+const ignore429CooldownEnabled = ref(false)
 const enableOpenAICompactMode = ref(false)
 const enableOpenAICompactModelMapping = ref(false)
 const enableRpmLimit = ref(false)
@@ -1730,8 +1769,6 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     extra.codex_cli_only = codexCLIOnlyEnabled.value
   }
 
-  // 子开关从属于 codex_cli_only：仅当同一次批量编辑也把父开关设为开启时才写入，
-  // 与 Create/Edit 语义对齐，避免在父开关关闭的账号上写入无意义的孤立字段。
   if (
     enableCodexCLIOnlyAppServer.value &&
     enableCodexCLIOnly.value &&
@@ -1739,6 +1776,15 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   ) {
     const extra = ensureExtra()
     extra.codex_cli_only_allow_app_server = codexCLIOnlyAppServerEnabled.value
+  }
+
+  if (enableIgnore429Cooldown.value) {
+    const extra = ensureExtra()
+    if (ignore429CooldownEnabled.value) {
+      extra.ignore_429_cooldown = true
+    } else {
+      extra.ignore_429_cooldown = false
+    }
   }
 
   if (enableOpenAICompactMode.value) {
