@@ -924,6 +924,12 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	if account.IsShadow() {
 		return
 	}
+	// 账号级：跳过所有 429 冷却逻辑
+	if account.IsIgnore429CooldownEnabled() {
+		slog.Info("rate_limit_429_cooldown_skipped_by_account",
+			"account_id", account.ID, "platform", account.Platform)
+		return
+	}
 	// 1. OpenAI 平台：优先尝试解析 x-codex-* 响应头（用于 rate_limit_exceeded）
 	if account.Platform == PlatformOpenAI {
 		persistOpenAI429PlanType(ctx, s.accountRepo, account, responseBody)

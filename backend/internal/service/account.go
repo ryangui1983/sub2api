@@ -1666,6 +1666,17 @@ func (a *Account) ResolveOpenAIResponsesWebSocketV2Mode(defaultMode string) stri
 	return resolvedDefault
 }
 
+// IsIgnore429CooldownEnabled 返回账号是否跳过 429 冷却惩罚。
+// 启用后收到上游 429 时不标记限流、不阻塞调度，继续参与请求调度。
+// 字段：accounts.extra.ignore_429_cooldown
+func (a *Account) IsIgnore429CooldownEnabled() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra["ignore_429_cooldown"].(bool)
+	return ok && enabled
+}
+
 // IsOpenAIWSForceHTTPEnabled 返回账号级"强制 HTTP"开关。
 // 字段：accounts.extra.openai_ws_force_http。
 func (a *Account) IsOpenAIWSForceHTTPEnabled() bool {
