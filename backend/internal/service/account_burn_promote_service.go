@@ -31,6 +31,8 @@ type burnPromoteRow struct {
 
 // BurnPromoteService adjusts account priorities based on 5h quota usage,
 // routing more traffic to accounts with higher remaining quota headroom.
+// Settings (enabled/interval/batchSize) are read from settingService on
+// each poll so changes take effect without a restart.
 //
 // Algorithm (mirrors ops-assistant burn-promote.ts):
 //  1. Cooldown accounts (rate_limit_reset_at > now) → priority COOLDOWN_PRIORITY
@@ -38,47 +40,37 @@ type burnPromoteRow struct {
 //  3. Highest-usage batch → lowest priority number (= highest scheduling priority)
 //     Subsequent batches +1; stale/zero usage → last batch
 type BurnPromoteService struct {
-	db         *sql.DB
-	lockCache  LeaderLockCache
-	instanceID string
-	interval   time.Duration
-	batchSize  int
-	enabled    bool
+	db             *sql.DB
+	lockCache      LeaderLockCache
+	settingService *SettingService
+	instanceID     string
+	lastRunAt      time.Time
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
 
-func NewBurnPromoteService(db *sql.DB, lockCache LeaderLockCache, interval time.Duration, batchSize int, enabled bool) *BurnPromoteService {
-	if batchSize <= 0 {
-		batchSize = burnPromoteDefaultBatchSize
-	}
-	if interval <= 0 {
-		interval = time.Minute
-	}
+func NewBurnPromoteService(db *sql.DB, lockCache LeaderLockCache, settingService *SettingService) *BurnPromoteService {
 	return &BurnPromoteService{
-		db:         db,
-		lockCache:  lockCache,
-		instanceID: uuid.NewString(),
-		interval:   interval,
-		batchSize:  batchSize,
-		enabled:    enabled,
-		stopCh:     make(chan struct{}),
+		db:             db,
+		lockCache:      lockCache,
+		settingService: settingService,
+		instanceID:     uuid.NewString(),
+		stopCh:         make(chan struct{}),
 	}
 }
 
 func (s *BurnPromoteService) Start() {
-	if s == nil || !s.enabled || s.db == nil {
+	if s == nil || s.db == nil {
 		return
 	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		ticker := time.NewTicker(s.interval)
+		// Poll every 5s so interval changes in settings take effect quickly.
+		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
-		// Run once immediately on startup.
-		s.runCycle()
 		for {
 			select {
 			case <-s.stopCh:
@@ -99,12 +91,24 @@ func (s *BurnPromoteService) Stop() {
 }
 
 func (s *BurnPromoteService) runCycle() {
+	// Read settings on every poll; changes take effect without restart.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	settings, err := s.settingService.GetBurnPromoteSettings(ctx)
+	if err != nil || !settings.Enabled {
+		return
+	}
+
+	interval := time.Duration(settings.IntervalSeconds) * time.Second
+	if time.Since(s.lastRunAt) < interval {
+		return
+	}
+	s.lastRunAt = time.Now()
+
 	// Acquire leader lock so only one instance runs per cycle.
 	if s.lockCache != nil {
-		acquired, err := s.lockCache.AcquireLock(ctx, burnPromoteLeaderLockKey, s.instanceID, int(burnPromoteLeaderLockTTL.Milliseconds()))
+		acquired, err := s.lockCache.TryAcquireLeaderLock(ctx, burnPromoteLeaderLockKey, s.instanceID, burnPromoteLeaderLockTTL)
 		if err != nil {
 			slog.Warn("burn_promote_leader_lock_error", "error", err)
 			return
@@ -115,7 +119,7 @@ func (s *BurnPromoteService) runCycle() {
 		defer func() {
 			bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer bgCancel()
-			_ = s.lockCache.ReleaseLock(bgCtx, burnPromoteLeaderLockKey, s.instanceID)
+			_ = s.lockCache.ReleaseLeaderLock(bgCtx, burnPromoteLeaderLockKey, s.instanceID)
 		}()
 	}
 
@@ -128,7 +132,7 @@ func (s *BurnPromoteService) runCycle() {
 		return
 	}
 
-	updates := s.computePriorityUpdates(rows)
+	updates := s.computePriorityUpdates(rows, settings.BatchSize)
 	if len(updates) == 0 {
 		return
 	}
@@ -180,7 +184,7 @@ func (s *BurnPromoteService) fetchRows(ctx context.Context) ([]burnPromoteRow, e
 
 // computePriorityUpdates returns a map of priority → []accountID for accounts
 // whose priority needs to change.  Only changed accounts are included.
-func (s *BurnPromoteService) computePriorityUpdates(rows []burnPromoteRow) map[int][]int64 {
+func (s *BurnPromoteService) computePriorityUpdates(rows []burnPromoteRow, batchSize int) map[int][]int64 {
 	now := time.Now()
 	var cooldown []burnPromoteRow
 	var active []struct {
@@ -214,8 +218,8 @@ func (s *BurnPromoteService) computePriorityUpdates(rows []burnPromoteRow) map[i
 		priority int
 	}
 	var batches []batch
-	for i := 0; i < len(active); i += s.batchSize {
-		end := i + s.batchSize
+	for i := 0; i < len(active); i += batchSize {
+		end := i + batchSize
 		if end > len(active) {
 			end = len(active)
 		}

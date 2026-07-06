@@ -377,6 +377,9 @@ const (
 	// SettingKeyRateLimit429CooldownSettings stores JSON config for 429 fallback cooldown handling.
 	SettingKeyRateLimit429CooldownSettings = "rate_limit_429_cooldown_settings"
 
+	// SettingKeyBurnPromoteSettings stores JSON config for burn-promote account scheduling.
+	SettingKeyBurnPromoteSettings = "burn_promote_settings"
+
 	// =========================
 	// Stream Timeout Handling
 	// =========================

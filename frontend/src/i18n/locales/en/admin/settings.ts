@@ -926,6 +926,18 @@ export default {
         saved: '429 default cooldown settings saved',
         saveFailed: 'Failed to save 429 default cooldown settings'
       },
+      burnPromote: {
+        title: 'Burn-Promote Scheduling',
+        description: 'Dynamically adjust account priorities based on 5-hour usage, routing more requests to high-usage accounts to balance consumption',
+        enabled: 'Enable Burn-Promote Scheduling',
+        enabledHint: 'Automatically rank account priorities by usage each cycle; cooldown accounts are deprioritized',
+        intervalSeconds: 'Scheduling Interval (seconds)',
+        intervalSecondsHint: 'How often to recalculate priorities (10-3600 seconds)',
+        batchSize: 'Batch Size',
+        batchSizeHint: 'Number of accounts per priority tier (1-100)',
+        saved: 'Burn-promote settings saved',
+        saveFailed: 'Failed to save burn-promote settings'
+      },
       streamTimeout: {
         title: 'Stream Timeout Handling',
         description: 'Configure account handling strategy when upstream response times out',

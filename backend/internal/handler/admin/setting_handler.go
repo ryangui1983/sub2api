@@ -466,3 +466,54 @@ func systemSettingsResponseData(settings dto.SystemSettings, authSourceDefaults 
 
 	return data
 }
+
+// GetBurnPromoteSettings 获取促消耗调度配置
+// GET /api/v1/admin/settings/burn-promote
+func (h *SettingHandler) GetBurnPromoteSettings(c *gin.Context) {
+	settings, err := h.settingService.GetBurnPromoteSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.BurnPromoteSettings{
+		Enabled:         settings.Enabled,
+		IntervalSeconds: settings.IntervalSeconds,
+		BatchSize:       settings.BatchSize,
+	})
+}
+
+// UpdateBurnPromoteSettingsRequest 更新促消耗调度配置请求
+type UpdateBurnPromoteSettingsRequest struct {
+	Enabled         bool `json:"enabled"`
+	IntervalSeconds int  `json:"interval_seconds"`
+	BatchSize       int  `json:"batch_size"`
+}
+
+// UpdateBurnPromoteSettings 更新促消耗调度配置
+// PUT /api/v1/admin/settings/burn-promote
+func (h *SettingHandler) UpdateBurnPromoteSettings(c *gin.Context) {
+	var req UpdateBurnPromoteSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	settings := &service.BurnPromoteSettings{
+		Enabled:         req.Enabled,
+		IntervalSeconds: req.IntervalSeconds,
+		BatchSize:       req.BatchSize,
+	}
+	if err := h.settingService.SetBurnPromoteSettings(c.Request.Context(), settings); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	updated, err := h.settingService.GetBurnPromoteSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.BurnPromoteSettings{
+		Enabled:         updated.Enabled,
+		IntervalSeconds: updated.IntervalSeconds,
+		BatchSize:       updated.BatchSize,
+	})
+}

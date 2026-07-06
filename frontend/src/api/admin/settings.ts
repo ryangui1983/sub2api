@@ -1187,6 +1187,31 @@ export async function updateRateLimit429CooldownSettings(
   return data;
 }
 
+// ==================== Burn Promote Settings ====================
+
+export interface BurnPromoteSettings {
+  enabled: boolean;
+  interval_seconds: number;
+  batch_size: number;
+}
+
+export async function getBurnPromoteSettings(): Promise<BurnPromoteSettings> {
+  const { data } = await apiClient.get<BurnPromoteSettings>(
+    "/admin/settings/burn-promote",
+  );
+  return data;
+}
+
+export async function updateBurnPromoteSettings(
+  settings: BurnPromoteSettings,
+): Promise<BurnPromoteSettings> {
+  const { data } = await apiClient.put<BurnPromoteSettings>(
+    "/admin/settings/burn-promote",
+    settings,
+  );
+  return data;
+}
+
 // ==================== Stream Timeout Settings ====================
 
 /**
@@ -1413,6 +1438,8 @@ export const settingsAPI = {
   updateOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
+  getBurnPromoteSettings,
+  updateBurnPromoteSettings,
   getStreamTimeoutSettings,
   updateStreamTimeoutSettings,
   getRectifierSettings,
