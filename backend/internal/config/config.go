@@ -840,6 +840,9 @@ type GatewayConfig struct {
 	// Antigravity 429 fallback 限流时间（分钟），解析重置时间失败时使用
 	AntigravityFallbackCooldownMinutes int `mapstructure:"antigravity_fallback_cooldown_minutes"`
 
+	// BurnPromote: 促消耗调度配置（按5h用量动态分配账号优先级）
+	BurnPromote BurnPromoteConfig `mapstructure:"burn_promote"`
+
 	// Scheduling: 账号调度相关配置
 	Scheduling GatewaySchedulingConfig `mapstructure:"scheduling"`
 
@@ -1106,6 +1109,16 @@ type TLSProfileConfig struct {
 	// 空则使用内置默认顺序 [0,11,10,35,16,22,23,13,43,45,51]
 	// GREASE值(如0x0a0a)会自动插入GREASE扩展
 	Extensions []uint16 `mapstructure:"extensions"`
+}
+
+// BurnPromoteConfig 促消耗调度配置
+type BurnPromoteConfig struct {
+	// Enabled: 是否启用促消耗调度
+	Enabled bool `mapstructure:"enabled"`
+	// IntervalSeconds: 调度周期（秒），默认 60
+	IntervalSeconds int `mapstructure:"interval_seconds"`
+	// BatchSize: 每批账号数量，默认 20
+	BatchSize int `mapstructure:"batch_size"`
 }
 
 // GatewaySchedulingConfig accounts scheduling configuration.
