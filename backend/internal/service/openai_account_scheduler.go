@@ -1846,7 +1846,15 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(accountID int64
 	if scheduler == nil {
 		return
 	}
-	scheduler.ReportResult(accountID, success, firstTokenMs)
+	// ignore_429_cooldown：账号开启了无视错误模式，强制上报成功
+	// 防止错误率EWMA 升高导致 sticky_escape 触发，降低该账号的调度概率
+	reportSuccess := success
+	if !success && accountID > 0 && s.schedulerSnapshot != nil {
+		if acct, err := s.schedulerSnapshot.GetAccount(context.Background(), accountID); err == nil && acct != nil && acct.IsIgnore429CooldownEnabled() {
+			reportSuccess = true
+		}
+	}
+	scheduler.ReportResult(accountID, reportSuccess, firstTokenMs)
 }
 
 func (s *OpenAIGatewayService) RecordOpenAIAccountSwitch() {
