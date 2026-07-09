@@ -946,6 +946,80 @@
         </div>
       </div>
 
+      <!-- 禁用5h自动暂停 -->
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label id="bulk-edit-auto-pause-5h-label" class="input-label mb-0" for="bulk-edit-auto-pause-5h-enabled">
+              禁用5h自动暂停
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              开启后该账号收到5h限额时不自动暂停调度
+            </p>
+          </div>
+          <input
+            v-model="enableAutoPause5hDisabled"
+            id="bulk-edit-auto-pause-5h-enabled"
+            type="checkbox"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div :class="!enableAutoPause5hDisabled && 'pointer-events-none opacity-50'">
+          <button
+            type="button"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              autoPause5hDisabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+            @click="autoPause5hDisabled = !autoPause5hDisabled"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                autoPause5hDisabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
+      <!-- 禁用7d自动暂停 -->
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label id="bulk-edit-auto-pause-7d-label" class="input-label mb-0" for="bulk-edit-auto-pause-7d-enabled">
+              禁用7d自动暂停
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              开启后该账号收到7d限额时不自动暂停调度
+            </p>
+          </div>
+          <input
+            v-model="enableAutoPause7dDisabled"
+            id="bulk-edit-auto-pause-7d-enabled"
+            type="checkbox"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div :class="!enableAutoPause7dDisabled && 'pointer-events-none opacity-50'">
+          <button
+            type="button"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              autoPause7dDisabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+            @click="autoPause7dDisabled = !autoPause7dDisabled"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                autoPause7dDisabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <!-- OpenAI API Key WS mode -->
       <div v-if="allOpenAIAPIKey" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1448,6 +1522,10 @@ const enableCodexCLIOnly = ref(false)
 const enableCodexCLIOnlyAppServer = ref(false)
 const enableIgnore429Cooldown = ref(false)
 const ignore429CooldownEnabled = ref(false)
+const enableAutoPause5hDisabled = ref(false)
+const autoPause5hDisabled = ref(false)
+const enableAutoPause7dDisabled = ref(false)
+const autoPause7dDisabled = ref(false)
 const enableOpenAICompactMode = ref(false)
 const enableOpenAICompactModelMapping = ref(false)
 const enableRpmLimit = ref(false)
@@ -1785,6 +1863,16 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     } else {
       extra.ignore_429_cooldown = false
     }
+  }
+
+  if (enableAutoPause5hDisabled.value) {
+    const extra = ensureExtra()
+    extra.auto_pause_5h_disabled = autoPause5hDisabled.value
+  }
+
+  if (enableAutoPause7dDisabled.value) {
+    const extra = ensureExtra()
+    extra.auto_pause_7d_disabled = autoPause7dDisabled.value
   }
 
   if (enableOpenAICompactMode.value) {
