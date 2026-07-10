@@ -112,6 +112,8 @@ const (
 	openAIGPT54LongContextInputThreshold   = 272000
 	openAIGPT54LongContextInputMultiplier  = 2.0
 	openAIGPT54LongContextOutputMultiplier = 1.5
+	// gpt-5.6（sol/terra/luna）缓存创建价 = 输入价 × 1.25（上游 LiteLLM 数据暂缺该字段）。
+	openAIGPT56CacheCreationInputMultiplier = 1.25
 )
 
 func normalizeBillingServiceTier(serviceTier string) string {
@@ -1060,7 +1062,10 @@ func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *
 	if !isOpenAIGPT54Model(model) {
 		return pricing
 	}
-	if pricing.LongContextInputThreshold > 0 && pricing.LongContextInputMultiplier > 0 && pricing.LongContextOutputMultiplier > 0 {
+	longContextSet := pricing.LongContextInputThreshold > 0 && pricing.LongContextInputMultiplier > 0 && pricing.LongContextOutputMultiplier > 0
+	// gpt-5.6 缓存创建价上游数据暂缺；数据源为 0 时按输入价 ×1.25 补。
+	needCacheCreationFill := isOpenAIGPT56Model(model) && pricing.CacheCreationPricePerToken <= 0 && pricing.InputPricePerToken > 0
+	if longContextSet && !needCacheCreationFill {
 		return pricing
 	}
 	cloned := *pricing
@@ -1073,7 +1078,18 @@ func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *
 	if cloned.LongContextOutputMultiplier <= 0 {
 		cloned.LongContextOutputMultiplier = openAIGPT54LongContextOutputMultiplier
 	}
+	if needCacheCreationFill {
+		cloned.CacheCreationPricePerToken = cloned.InputPricePerToken * openAIGPT56CacheCreationInputMultiplier
+		if cloned.CacheCreation5mPrice <= 0 {
+			cloned.CacheCreation5mPrice = cloned.CacheCreationPricePerToken
+		}
+	}
 	return &cloned
+}
+
+func isOpenAIGPT56Model(model string) bool {
+	normalized := normalizeKnownOpenAICodexModel(model)
+	return normalized == "gpt-5.6-sol" || normalized == "gpt-5.6-terra" || normalized == "gpt-5.6-luna"
 }
 
 func (s *BillingService) shouldApplySessionLongContextPricing(tokens UsageTokens, pricing *ModelPricing) bool {
