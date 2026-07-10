@@ -1087,11 +1087,6 @@ func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *
 	return &cloned
 }
 
-func isOpenAIGPT56Model(model string) bool {
-	normalized := normalizeKnownOpenAICodexModel(model)
-	return normalized == "gpt-5.6-sol" || normalized == "gpt-5.6-terra" || normalized == "gpt-5.6-luna"
-}
-
 func (s *BillingService) shouldApplySessionLongContextPricing(tokens UsageTokens, pricing *ModelPricing) bool {
 	if pricing == nil || pricing.LongContextInputThreshold <= 0 {
 		return false
