@@ -114,8 +114,6 @@ const (
 	openAIGPT54LongContextInputThreshold   = 272000
 	openAIGPT54LongContextInputMultiplier  = 2.0
 	openAIGPT54LongContextOutputMultiplier = 1.5
-	// gpt-5.6（sol/terra/luna）缓存创建价 = 输入价 × 1.25（上游 LiteLLM 数据暂缺该字段）。
-	openAIGPT56CacheCreationInputMultiplier = 1.25
 )
 
 func normalizeBillingServiceTier(serviceTier string) string {
