@@ -236,6 +236,13 @@ func ProvideBurnPromoteService(db *sql.DB, lockCache LeaderLockCache, settingSer
 	return svc
 }
 
+// ProvideUsageSinkService creates and starts UsageSinkService.
+func ProvideUsageSinkService(db *sql.DB, cfg *config.Config) *UsageSinkService {
+	svc := NewUsageSinkService(db, cfg)
+	svc.Start()
+	return svc
+}
+
 // ProvideTimingWheelService creates and starts TimingWheelService
 func ProvideTimingWheelService() (*TimingWheelService, error) {
 	svc, err := NewTimingWheelService()
