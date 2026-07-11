@@ -137,7 +137,7 @@ func (s *UsageSinkService) syncEvents(lastEventAt, lastErrorAt *time.Time) {
 func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) []SinkRequestEvent {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT ul.account_id,
-		       COALESCE(a.credentials->>'workspace_id', a.credentials->>'chatgpt_account_id', '') AS workspace_id,
+		       COALESCE(a.credentials->>'chatgpt_account_id', '')  AS workspace_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       ul.actual_cost,
 		       EXTRACT(EPOCH FROM ul.created_at) * 1000 AS created_ms
@@ -171,7 +171,7 @@ func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) [
 func (s *UsageSinkService) pollErrorLogs(ctx context.Context, since time.Time) []SinkRequestEvent {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT oel.account_id,
-		       COALESCE(a.credentials->>'workspace_id', a.credentials->>'chatgpt_account_id', '') AS workspace_id,
+		       COALESCE(a.credentials->>'chatgpt_account_id', '')  AS workspace_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       COALESCE(oel.upstream_status_code, oel.status_code, 0) AS status_code,
 		       COALESCE(oel.provider_error_code, '') AS error_code,
@@ -209,7 +209,7 @@ func (s *UsageSinkService) syncSnapshots() {
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT a.id,
-		       COALESCE(a.credentials->>'workspace_id', a.credentials->>'chatgpt_account_id', '') AS workspace_id,
+		       COALESCE(a.credentials->>'chatgpt_account_id', '')  AS workspace_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       a.status,
 		       COALESCE(a.error_message, '') AS error_message,
