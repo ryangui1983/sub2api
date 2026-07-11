@@ -30,22 +30,21 @@ type SinkRequestEvent struct {
 }
 
 // SinkAccountSnapshot is the current state of one account.
-// Used for both initial full-sync and incremental updated_at polling.
-// When TotalCost == 0 and it's an incremental update, ops-assistant should preserve the existing value.
+// Used for incremental updated_at polling — TotalCost is not included;
+// ops-assistant computes total_cost by summing pushed request events.
 type SinkAccountSnapshot struct {
-	InstanceID              string  `json:"instance_id"`
-	AccountID               int64   `json:"account_id"`
-	ChatgptAccountID        string  `json:"chatgpt_account_id,omitempty"`
-	Email                   string  `json:"email,omitempty"`
-	Status                  string  `json:"status"`
-	ErrorMessage            string  `json:"error_message,omitempty"`
-	TempUnschedulableUntil  *int64  `json:"temp_unschedulable_until,omitempty"` // unix ms
-	TempUnschedulableReason string  `json:"temp_unschedulable_reason,omitempty"`
-	Schedulable             bool    `json:"schedulable"`
-	TotalCost               float64 `json:"total_cost"`
-	LastUsedAt              *int64  `json:"last_used_at,omitempty"`
-	AccountCreatedAt        int64   `json:"account_created_at"`
-	SnapshottedAt           int64   `json:"snapshotted_at"`
+	InstanceID              string `json:"instance_id"`
+	AccountID               int64  `json:"account_id"`
+	ChatgptAccountID        string `json:"chatgpt_account_id,omitempty"`
+	Email                   string `json:"email,omitempty"`
+	Status                  string `json:"status"`
+	ErrorMessage            string `json:"error_message,omitempty"`
+	TempUnschedulableUntil  *int64 `json:"temp_unschedulable_until,omitempty"` // unix ms
+	TempUnschedulableReason string `json:"temp_unschedulable_reason,omitempty"`
+	Schedulable             bool   `json:"schedulable"`
+	LastUsedAt              *int64 `json:"last_used_at,omitempty"`
+	AccountCreatedAt        int64  `json:"account_created_at"`
+	SnapshottedAt           int64  `json:"snapshotted_at"`
 }
 
 type sinkPayload struct {
@@ -234,7 +233,6 @@ func (s *UsageSinkService) pollErrorLogs(ctx context.Context, since time.Time) [
 }
 
 // pollAccountChanges returns accounts whose updated_at > since (status changes).
-// TotalCost is intentionally 0 here — ops-assistant should not overwrite the existing value.
 func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Time) []SinkAccountSnapshot {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT a.id,
@@ -294,8 +292,6 @@ func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Ti
 	return out
 }
 
-// syncFullSnapshot pushes a complete account list with all-time total_cost.
-// Run once at startup and every hour as a baseline.
 func (s *UsageSinkService) push(payload sinkPayload) {
 	data, err := json.Marshal(payload)
 	if err != nil {
