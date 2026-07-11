@@ -20,25 +20,23 @@ const (
 )
 
 // burnPromoteRow holds only the fields we need from the accounts table.
-// Reading just these 5 columns avoids loading credentials/extra in full.
 type burnPromoteRow struct {
-	id               int64
-	currentPriority  int
-	fiveHourPct      *float64 // extra->>'codex_5h_used_percent'
-	fiveHourResetAt  *time.Time
-	rateLimitResetAt *time.Time
+	id              int64
+	currentPriority int
+	totalCost       float64 // 30-day rolling actual_cost sum
+	tempBlocked     bool    // temp_unschedulable_until > now
 }
 
-// BurnPromoteService adjusts account priorities based on 5h quota usage,
-// routing more traffic to accounts with higher remaining quota headroom.
+// BurnPromoteService adjusts account priorities based on 30-day total cost,
+// routing more traffic to accounts with higher cumulative consumption.
 // Settings (enabled/interval/batchSize) are read from settingService on
 // each poll so changes take effect without a restart.
 //
-// Algorithm (mirrors ops-assistant burn-promote.ts):
-//  1. Cooldown accounts (rate_limit_reset_at > now) → priority COOLDOWN_PRIORITY
-//  2. Active accounts sorted by 5h usage % descending, batched by BATCH_SIZE
-//  3. Highest-usage batch → lowest priority number (= highest scheduling priority)
-//     Subsequent batches +1; stale/zero usage → last batch
+// Algorithm:
+//  1. Accounts with temp_unschedulable_until > now are skipped (priority unchanged).
+//  2. Active accounts sorted by 30-day total_cost descending, batched by BATCH_SIZE.
+//  3. Highest-cost batch → priority 1 (= highest scheduling priority).
+//     Subsequent batches get priority 2, 3, … etc.
 type BurnPromoteService struct {
 	db             *sql.DB
 	lockCache      LeaderLockCache
@@ -147,23 +145,25 @@ func (s *BurnPromoteService) runCycle() {
 	}
 }
 
-// fetchRows reads only the 5 fields needed for the algorithm using raw SQL.
-// Selecting a narrow projection avoids loading large credentials/extra JSONB columns.
+// fetchRows reads account data needed for the algorithm using raw SQL.
 func (s *BurnPromoteService) fetchRows(ctx context.Context) ([]burnPromoteRow, error) {
 	const query = `
 		SELECT
-			id,
-			priority,
-			(extra->>'codex_5h_used_percent')::float,
-			CASE WHEN extra->>'codex_5h_reset_at' <> '' THEN (extra->>'codex_5h_reset_at')::timestamptz ELSE NULL END,
-			rate_limit_reset_at
-		FROM accounts
+			a.id,
+			a.priority,
+			COALESCE((
+				SELECT SUM(ul.actual_cost)
+				FROM usage_logs ul
+				WHERE ul.account_id = a.id
+				  AND ul.created_at > NOW() - INTERVAL '30 days'
+			), 0) AS total_cost_30d,
+			(a.temp_unschedulable_until IS NOT NULL AND a.temp_unschedulable_until > NOW()) AS temp_blocked
+		FROM accounts a
 		WHERE
-			platform = 'openai'
-			AND type   = 'oauth'
-			AND status = 'active'
-			AND schedulable = TRUE
-			AND deleted_at IS NULL
+			a.platform    = 'openai'
+			AND a.type    = 'oauth'
+			AND a.status  = 'active'
+			AND a.deleted_at IS NULL
 	`
 	sqlRows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -174,7 +174,7 @@ func (s *BurnPromoteService) fetchRows(ctx context.Context) ([]burnPromoteRow, e
 	var out []burnPromoteRow
 	for sqlRows.Next() {
 		var r burnPromoteRow
-		if err := sqlRows.Scan(&r.id, &r.currentPriority, &r.fiveHourPct, &r.fiveHourResetAt, &r.rateLimitResetAt); err != nil {
+		if err := sqlRows.Scan(&r.id, &r.currentPriority, &r.totalCost, &r.tempBlocked); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -183,75 +183,48 @@ func (s *BurnPromoteService) fetchRows(ctx context.Context) ([]burnPromoteRow, e
 }
 
 // computePriorityUpdates returns a map of priority → []accountID for accounts
-// whose priority needs to change.  Only changed accounts are included.
+// whose priority needs to change.
 func (s *BurnPromoteService) computePriorityUpdates(rows []burnPromoteRow, batchSize int) map[int][]int64 {
-	now := time.Now()
-	var cooldown []burnPromoteRow
-	var active []struct {
-		id  int64
-		pct float64
+	type active struct {
+		id   int64
+		cost float64
 	}
+	var eligible []active
 
 	for _, r := range rows {
-		if r.rateLimitResetAt != nil && r.rateLimitResetAt.After(now) {
-			cooldown = append(cooldown, r)
-			continue
+		if r.tempBlocked {
+			continue // skip temporarily unschedulable accounts
 		}
-		// Stale usage window → treat as 0 % (sort to last batch)
-		stale := r.fiveHourResetAt != nil && !r.fiveHourResetAt.After(now)
-		pct := 0.0
-		if !stale && r.fiveHourPct != nil {
-			pct = *r.fiveHourPct
-		}
-		active = append(active, struct {
-			id  int64
-			pct float64
-		}{r.id, pct})
+		eligible = append(eligible, active{r.id, r.totalCost})
 	}
 
-	// Sort active descending by usage % so highest-usage accounts get highest priority.
-	sort.Slice(active, func(i, j int) bool { return active[i].pct > active[j].pct })
+	// Sort descending by 30-day cost: highest cost → highest priority (priority=1)
+	sort.Slice(eligible, func(i, j int) bool { return eligible[i].cost > eligible[j].cost })
 
-	// Build batches.
 	type batch struct {
 		ids      []int64
 		priority int
 	}
 	var batches []batch
-	for i := 0; i < len(active); i += batchSize {
+	for i := 0; i < len(eligible); i += batchSize {
 		end := i + batchSize
-		if end > len(active) {
-			end = len(active)
+		if end > len(eligible) {
+			end = len(eligible)
 		}
 		var ids []int64
-		for _, a := range active[i:end] {
+		for _, a := range eligible[i:end] {
 			ids = append(ids, a.id)
 		}
-		batches = append(batches, batch{ids: ids})
+		// batch[0] → priority 1, batch[1] → priority 2, …
+		batches = append(batches, batch{ids: ids, priority: len(batches) + 1})
 	}
 
-	totalBatches := len(batches)
-	for i := range batches {
-		// batch[0] (highest usage) gets lowest number = highest scheduling priority
-		batches[i].priority = burnPromoteCooldownPriority - totalBatches + i
-	}
-
-	// Build a lookup of current priorities for change detection.
 	currentPriority := make(map[int64]int, len(rows))
 	for _, r := range rows {
 		currentPriority[r.id] = r.currentPriority
 	}
 
 	updates := make(map[int][]int64)
-
-	// Cooldown accounts.
-	for _, r := range cooldown {
-		if r.currentPriority != burnPromoteCooldownPriority {
-			updates[burnPromoteCooldownPriority] = append(updates[burnPromoteCooldownPriority], r.id)
-		}
-	}
-
-	// Active accounts.
 	for _, b := range batches {
 		for _, id := range b.ids {
 			if currentPriority[id] != b.priority {

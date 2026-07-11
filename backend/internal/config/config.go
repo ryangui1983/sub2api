@@ -860,6 +860,9 @@ type GatewayConfig struct {
 	// UserMessageQueue: 用户消息串行队列配置
 	// 对 role:"user" 的真实用户消息实施账号级串行化 + RPM 自适应延迟
 	UserMessageQueue UserMessageQueueConfig `mapstructure:"user_message_queue"`
+
+	// UsageSink: 使用量推送到外部汇总服务（ops-assistant）的配置
+	UsageSink GatewayUsageSinkConfig `mapstructure:"usage_sink"`
 }
 
 // GatewayOpenAIHTTP2Config OpenAI HTTP 上游协议配置。
@@ -1119,6 +1122,18 @@ type BurnPromoteConfig struct {
 	IntervalSeconds int `mapstructure:"interval_seconds"`
 	// BatchSize: 每批账号数量，默认 20
 	BatchSize int `mapstructure:"batch_size"`
+}
+
+// GatewayUsageSinkConfig 使用量推送到外部汇总服务的配置（ops-assistant）
+type GatewayUsageSinkConfig struct {
+	// URL: 汇总服务地址，如 http://localhost:3100。为空时禁用推送。
+	URL string `mapstructure:"url"`
+	// Token: 推送鉴权 token，对应汇总服务的 X-Sink-Token 请求头
+	Token string `mapstructure:"token"`
+	// IntervalSeconds: 推送间隔（秒），默认 30
+	IntervalSeconds int `mapstructure:"interval_seconds"`
+	// InstanceID: 实例标识，用于多实例区分（如 api3/api5/api6）
+	InstanceID string `mapstructure:"instance_id"`
 }
 
 // GatewaySchedulingConfig accounts scheduling configuration.
@@ -2076,6 +2091,12 @@ func setDefaults() {
 	viper.SetDefault("gateway.usage_record.auto_scale_check_interval_seconds", 3)
 	viper.SetDefault("gateway.usage_record.auto_scale_cooldown_seconds", 10)
 	viper.SetDefault("gateway.user_group_rate_cache_ttl_seconds", 30)
+
+	// UsageSink defaults
+	viper.SetDefault("gateway.usage_sink.url", "")
+	viper.SetDefault("gateway.usage_sink.token", "")
+	viper.SetDefault("gateway.usage_sink.interval_seconds", 30)
+	viper.SetDefault("gateway.usage_sink.instance_id", "")
 	viper.SetDefault("gateway.models_list_cache_ttl_seconds", 15)
 	// TLS指纹伪装配置（默认关闭，需要账号级别单独启用）
 	// 用户消息串行队列默认值
