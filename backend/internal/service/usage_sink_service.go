@@ -98,10 +98,6 @@ func (s *UsageSinkService) run() {
 	var lastErrorAt time.Time
 	var lastAccountAt time.Time
 
-	// Initial full account snapshot (with total_cost) once at startup, then every hour.
-	const fullSnapshotInterval = time.Hour
-	var lastFullSnapshot time.Time
-
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -110,16 +106,9 @@ func (s *UsageSinkService) run() {
 		case <-s.stopCh:
 			return
 		case <-ticker.C:
-			// Drain request events — loop until caught up.
 			s.drainUsageLogs(&lastEventAt)
 			s.drainErrorLogs(&lastErrorAt)
-			// Drain account state changes — loop until caught up.
 			s.drainAccountChanges(&lastAccountAt)
-			// Full snapshot (includes total_cost baseline) once per hour.
-			if time.Since(lastFullSnapshot) >= fullSnapshotInterval {
-				s.syncFullSnapshot()
-				lastFullSnapshot = time.Now()
-			}
 		}
 	}
 }
@@ -307,73 +296,6 @@ func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Ti
 
 // syncFullSnapshot pushes a complete account list with all-time total_cost.
 // Run once at startup and every hour as a baseline.
-func (s *UsageSinkService) syncFullSnapshot() {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT a.id,
-		       COALESCE(a.credentials->>'chatgpt_account_id', '') AS chatgpt_account_id,
-		       COALESCE(a.credentials->>'email', '') AS email,
-		       a.status,
-		       COALESCE(a.error_message, '') AS error_message,
-		       a.temp_unschedulable_until,
-		       COALESCE(a.temp_unschedulable_reason, '') AS temp_reason,
-		       a.schedulable,
-		       a.last_used_at,
-		       a.created_at,
-		       COALESCE(cost.total, 0) AS total_cost
-		FROM accounts a
-		LEFT JOIN (
-		    SELECT account_id, SUM(actual_cost) AS total
-		    FROM usage_logs
-		    GROUP BY account_id
-		) cost ON cost.account_id = a.id
-		WHERE a.deleted_at IS NULL AND a.platform = 'openai'
-		ORDER BY a.id`)
-	if err != nil {
-		log.Printf("[UsageSink] full snapshot: %v", err)
-		return
-	}
-	defer rows.Close()
-
-	now := time.Now().UnixMilli()
-	var snapshots []SinkAccountSnapshot
-	for rows.Next() {
-		var snap SinkAccountSnapshot
-		var tempUntil sql.NullTime
-		var lastUsed sql.NullTime
-		var createdAt time.Time
-
-		if err := rows.Scan(
-			&snap.AccountID, &snap.ChatgptAccountID, &snap.Email,
-			&snap.Status, &snap.ErrorMessage,
-			&tempUntil, &snap.TempUnschedulableReason,
-			&snap.Schedulable,
-			&lastUsed, &createdAt,
-			&snap.TotalCost,
-		); err != nil {
-			continue
-		}
-		snap.InstanceID = s.cfg.Gateway.UsageSink.InstanceID
-		snap.AccountCreatedAt = createdAt.UnixMilli()
-		snap.SnapshottedAt = now
-		if tempUntil.Valid {
-			ms := tempUntil.Time.UnixMilli()
-			snap.TempUnschedulableUntil = &ms
-		}
-		if lastUsed.Valid {
-			ms := lastUsed.Time.UnixMilli()
-			snap.LastUsedAt = &ms
-		}
-		snapshots = append(snapshots, snap)
-	}
-
-	if len(snapshots) > 0 {
-		s.push(sinkPayload{Snapshots: snapshots})
-	}
-}
-
 func (s *UsageSinkService) push(payload sinkPayload) {
 	data, err := json.Marshal(payload)
 	if err != nil {
