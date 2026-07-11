@@ -19,7 +19,8 @@ const sinkBatchSize = 500 // records per DB query batch
 type SinkRequestEvent struct {
 	InstanceID       string  `json:"instance_id"`
 	AccountID        int64   `json:"account_id"`
-	ChatgptUserID string  `json:"chatgpt_user_id,omitempty"`
+	RequestID        string  `json:"request_id,omitempty"`
+	ChatgptUserID    string  `json:"chatgpt_user_id,omitempty"`
 	Email            string  `json:"email,omitempty"`
 	Success          bool    `json:"success"`
 	StatusCode       int     `json:"status_code,omitempty"`
@@ -166,6 +167,7 @@ func (s *UsageSinkService) drainAccountChanges(lastAt *time.Time) {
 func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) []SinkRequestEvent {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT ul.account_id,
+		       COALESCE(ul.request_id, '') AS request_id,
 		       COALESCE(a.credentials->>'chatgpt_user_id', '') AS chatgpt_user_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       ul.actual_cost,
@@ -185,7 +187,7 @@ func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) [
 	for rows.Next() {
 		var e SinkRequestEvent
 		var ms float64
-		if err := rows.Scan(&e.AccountID, &e.ChatgptUserID, &e.Email, &e.ActualCost, &ms); err != nil {
+		if err := rows.Scan(&e.AccountID, &e.RequestID, &e.ChatgptUserID, &e.Email, &e.ActualCost, &ms); err != nil {
 			continue
 		}
 		e.InstanceID = s.cfg.Gateway.UsageSink.InstanceID
@@ -200,6 +202,7 @@ func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) [
 func (s *UsageSinkService) pollErrorLogs(ctx context.Context, since time.Time) []SinkRequestEvent {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT oel.account_id,
+		       COALESCE(oel.request_id, '') AS request_id,
 		       COALESCE(a.credentials->>'chatgpt_user_id', '') AS chatgpt_user_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       COALESCE(oel.upstream_status_code, oel.status_code, 0) AS status_code,
@@ -221,7 +224,7 @@ func (s *UsageSinkService) pollErrorLogs(ctx context.Context, since time.Time) [
 	for rows.Next() {
 		var e SinkRequestEvent
 		var ms float64
-		if err := rows.Scan(&e.AccountID, &e.ChatgptUserID, &e.Email, &e.StatusCode, &e.ErrorCode, &e.ErrorDetail, &ms); err != nil {
+		if err := rows.Scan(&e.AccountID, &e.RequestID, &e.ChatgptUserID, &e.Email, &e.StatusCode, &e.ErrorCode, &e.ErrorDetail, &ms); err != nil {
 			continue
 		}
 		e.InstanceID = s.cfg.Gateway.UsageSink.InstanceID
