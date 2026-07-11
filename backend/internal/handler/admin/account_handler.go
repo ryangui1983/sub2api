@@ -962,6 +962,43 @@ func (h *AccountHandler) Delete(c *gin.Context) {
 	response.Success(c, gin.H{"message": "Account deleted successfully"})
 }
 
+func (h *AccountHandler) PurgeDeleted(c *gin.Context) {
+	n, err := h.adminService.PurgeDeletedAccounts(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"purged": n})
+}
+
+type PurgeLogsRequest struct {
+	Before string `json:"before" binding:"required"` // RFC3339 or YYYY-MM-DD
+}
+
+func (h *AccountHandler) PurgeLogs(c *gin.Context) {
+	var req PurgeLogsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "before field required (RFC3339 or YYYY-MM-DD)")
+		return
+	}
+	var before time.Time
+	var err error
+	before, err = time.Parse(time.RFC3339, req.Before)
+	if err != nil {
+		before, err = time.Parse("2006-01-02", req.Before)
+		if err != nil {
+			response.BadRequest(c, "invalid before format, use RFC3339 or YYYY-MM-DD")
+			return
+		}
+	}
+	n, err := h.adminService.PurgeLogsBefore(c.Request.Context(), before)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"purged": n})
+}
+
 // TestAccountRequest represents the request body for testing an account
 type TestAccountRequest struct {
 	ModelID string `json:"model_id"`

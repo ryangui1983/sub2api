@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -2392,4 +2393,26 @@ func (r *accountRepository) ListShadowsByParent(ctx context.Context, parentID in
 		out = append(out, accountEntityToService(m))
 	}
 	return out, nil
+}
+
+func (r *accountRepository) PurgeDeletedAccounts(ctx context.Context) (int64, error) {
+	result, err := r.sql.ExecContext(ctx, `DELETE FROM accounts WHERE deleted_at IS NOT NULL`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (r *accountRepository) PurgeLogsBefore(ctx context.Context, before time.Time) (int64, error) {
+	r1, err := r.sql.ExecContext(ctx, `DELETE FROM usage_logs WHERE created_at < $1`, before)
+	if err != nil {
+		return 0, fmt.Errorf("purge usage_logs: %w", err)
+	}
+	n1, _ := r1.RowsAffected()
+	r2, err := r.sql.ExecContext(ctx, `DELETE FROM ops_error_logs WHERE created_at < $1`, before)
+	if err != nil {
+		return n1, fmt.Errorf("purge ops_error_logs: %w", err)
+	}
+	n2, _ := r2.RowsAffected()
+	return n1 + n2, nil
 }
