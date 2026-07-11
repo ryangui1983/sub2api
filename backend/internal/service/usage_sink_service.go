@@ -13,44 +13,49 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
+const sinkBatchSize = 500 // records per DB query batch
+
 // SinkRequestEvent is a single request event (success or failure) pushed to ops-assistant.
 type SinkRequestEvent struct {
-	InstanceID  string  `json:"instance_id"`
-	AccountID   int64   `json:"account_id"`
+	InstanceID       string  `json:"instance_id"`
+	AccountID        int64   `json:"account_id"`
 	ChatgptAccountID string  `json:"chatgpt_account_id,omitempty"`
-	Email       string  `json:"email,omitempty"`
-	Success     bool    `json:"success"`
-	StatusCode  int     `json:"status_code,omitempty"`
-	ActualCost  float64 `json:"actual_cost"`
-	ErrorCode   string  `json:"error_code,omitempty"`
-	ErrorDetail string  `json:"error_detail,omitempty"`
-	CreatedAt   int64   `json:"created_at"` // unix ms
+	Email            string  `json:"email,omitempty"`
+	Success          bool    `json:"success"`
+	StatusCode       int     `json:"status_code,omitempty"`
+	ActualCost       float64 `json:"actual_cost"`
+	ErrorCode        string  `json:"error_code,omitempty"`
+	ErrorDetail      string  `json:"error_detail,omitempty"`
+	CreatedAt        int64   `json:"created_at"` // unix ms
 }
 
-// SinkAccountSnapshot is the current state of one account, pushed periodically.
+// SinkAccountSnapshot is the current state of one account.
+// Used for both initial full-sync and incremental updated_at polling.
+// When TotalCost == 0 and it's an incremental update, ops-assistant should preserve the existing value.
 type SinkAccountSnapshot struct {
 	InstanceID              string  `json:"instance_id"`
 	AccountID               int64   `json:"account_id"`
-	ChatgptAccountID         string  `json:"chatgpt_account_id,omitempty"`
+	ChatgptAccountID        string  `json:"chatgpt_account_id,omitempty"`
 	Email                   string  `json:"email,omitempty"`
 	Status                  string  `json:"status"`
 	ErrorMessage            string  `json:"error_message,omitempty"`
 	TempUnschedulableUntil  *int64  `json:"temp_unschedulable_until,omitempty"` // unix ms
 	TempUnschedulableReason string  `json:"temp_unschedulable_reason,omitempty"`
 	Schedulable             bool    `json:"schedulable"`
-	TotalCost               float64 `json:"total_cost"` // 30-day rolling
+	TotalCost               float64 `json:"total_cost"`
 	LastUsedAt              *int64  `json:"last_used_at,omitempty"`
 	AccountCreatedAt        int64   `json:"account_created_at"`
 	SnapshottedAt           int64   `json:"snapshotted_at"`
 }
 
 type sinkPayload struct {
-	Events    []SinkRequestEvent   `json:"events,omitempty"`
+	Events    []SinkRequestEvent    `json:"events,omitempty"`
 	Snapshots []SinkAccountSnapshot `json:"snapshots,omitempty"`
 }
 
-// UsageSinkService polls usage_logs and ops_error_logs and pushes events to
-// ops-assistant for cross-instance aggregation. No-op when UsageSinkURL is empty.
+// UsageSinkService polls usage_logs, ops_error_logs and accounts for changes,
+// pushing them to ops-assistant for cross-instance aggregation.
+// No-op when UsageSinkURL is empty.
 type UsageSinkService struct {
 	db         *sql.DB
 	cfg        *config.Config
@@ -85,14 +90,17 @@ func (s *UsageSinkService) run() {
 	defer s.wg.Done()
 
 	interval := time.Duration(s.cfg.Gateway.UsageSink.IntervalSeconds) * time.Second
-	if interval < 10*time.Second {
-		interval = 30 * time.Second
+	if interval < 5*time.Second {
+		interval = 10 * time.Second
 	}
-	const snapshotInterval = 5 * time.Minute
 
 	var lastEventAt time.Time
 	var lastErrorAt time.Time
-	var lastSnapshotAt time.Time
+	var lastAccountAt time.Time
+
+	// Initial full account snapshot (with total_cost) once at startup, then every hour.
+	const fullSnapshotInterval = time.Hour
+	var lastFullSnapshot time.Time
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -102,42 +110,75 @@ func (s *UsageSinkService) run() {
 		case <-s.stopCh:
 			return
 		case <-ticker.C:
-			s.syncEvents(&lastEventAt, &lastErrorAt)
-			if time.Since(lastSnapshotAt) >= snapshotInterval {
-				s.syncSnapshots()
-				lastSnapshotAt = time.Now()
+			// Drain request events — loop until caught up.
+			s.drainUsageLogs(&lastEventAt)
+			s.drainErrorLogs(&lastErrorAt)
+			// Drain account state changes — loop until caught up.
+			s.drainAccountChanges(&lastAccountAt)
+			// Full snapshot (includes total_cost baseline) once per hour.
+			if time.Since(lastFullSnapshot) >= fullSnapshotInterval {
+				s.syncFullSnapshot()
+				lastFullSnapshot = time.Now()
 			}
 		}
 	}
 }
 
-func (s *UsageSinkService) syncEvents(lastEventAt, lastErrorAt *time.Time) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	var events []SinkRequestEvent
-
-	success := s.pollUsageLogs(ctx, *lastEventAt)
-	events = append(events, success...)
-	if len(success) > 0 {
-		*lastEventAt = time.UnixMilli(success[len(success)-1].CreatedAt)
+// drainUsageLogs fetches all new success events in batches until caught up.
+func (s *UsageSinkService) drainUsageLogs(lastAt *time.Time) {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		batch := s.pollUsageLogs(ctx, *lastAt)
+		cancel()
+		if len(batch) == 0 {
+			return
+		}
+		s.push(sinkPayload{Events: batch})
+		*lastAt = time.UnixMilli(batch[len(batch)-1].CreatedAt)
+		if len(batch) < sinkBatchSize {
+			return // caught up
+		}
 	}
+}
 
-	errors := s.pollErrorLogs(ctx, *lastErrorAt)
-	events = append(events, errors...)
-	if len(errors) > 0 {
-		*lastErrorAt = time.UnixMilli(errors[len(errors)-1].CreatedAt)
+// drainErrorLogs fetches all new failure events in batches until caught up.
+func (s *UsageSinkService) drainErrorLogs(lastAt *time.Time) {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		batch := s.pollErrorLogs(ctx, *lastAt)
+		cancel()
+		if len(batch) == 0 {
+			return
+		}
+		s.push(sinkPayload{Events: batch})
+		*lastAt = time.UnixMilli(batch[len(batch)-1].CreatedAt)
+		if len(batch) < sinkBatchSize {
+			return
+		}
 	}
+}
 
-	if len(events) > 0 {
-		s.push(sinkPayload{Events: events})
+// drainAccountChanges fetches accounts updated since lastAt in batches until caught up.
+func (s *UsageSinkService) drainAccountChanges(lastAt *time.Time) {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		batch := s.pollAccountChanges(ctx, *lastAt)
+		cancel()
+		if len(batch) == 0 {
+			return
+		}
+		s.push(sinkPayload{Snapshots: batch})
+		*lastAt = time.UnixMilli(batch[len(batch)-1].SnapshottedAt)
+		if len(batch) < sinkBatchSize {
+			return
+		}
 	}
 }
 
 func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) []SinkRequestEvent {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT ul.account_id,
-		       COALESCE(a.credentials->>'chatgpt_account_id', '')  AS chatgpt_account_id,
+		       COALESCE(a.credentials->>'chatgpt_account_id', '') AS chatgpt_account_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       ul.actual_cost,
 		       EXTRACT(EPOCH FROM ul.created_at) * 1000 AS created_ms
@@ -145,7 +186,7 @@ func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) [
 		LEFT JOIN accounts a ON a.id = ul.account_id
 		WHERE ul.created_at > $1
 		ORDER BY ul.created_at ASC
-		LIMIT 200`, since)
+		LIMIT $2`, since, sinkBatchSize)
 	if err != nil {
 		log.Printf("[UsageSink] poll usage_logs: %v", err)
 		return nil
@@ -171,7 +212,7 @@ func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) [
 func (s *UsageSinkService) pollErrorLogs(ctx context.Context, since time.Time) []SinkRequestEvent {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT oel.account_id,
-		       COALESCE(a.credentials->>'chatgpt_account_id', '')  AS chatgpt_account_id,
+		       COALESCE(a.credentials->>'chatgpt_account_id', '') AS chatgpt_account_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       COALESCE(oel.upstream_status_code, oel.status_code, 0) AS status_code,
 		       COALESCE(oel.provider_error_code, '') AS error_code,
@@ -181,7 +222,7 @@ func (s *UsageSinkService) pollErrorLogs(ctx context.Context, since time.Time) [
 		LEFT JOIN accounts a ON a.id = oel.account_id
 		WHERE oel.created_at > $1 AND oel.account_id IS NOT NULL
 		ORDER BY oel.created_at ASC
-		LIMIT 200`, since)
+		LIMIT $2`, since, sinkBatchSize)
 	if err != nil {
 		log.Printf("[UsageSink] poll ops_error_logs: %v", err)
 		return nil
@@ -203,8 +244,71 @@ func (s *UsageSinkService) pollErrorLogs(ctx context.Context, since time.Time) [
 	return out
 }
 
-func (s *UsageSinkService) syncSnapshots() {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+// pollAccountChanges returns accounts whose updated_at > since (status changes).
+// TotalCost is intentionally 0 here — ops-assistant should not overwrite the existing value.
+func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Time) []SinkAccountSnapshot {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT a.id,
+		       COALESCE(a.credentials->>'chatgpt_account_id', '') AS chatgpt_account_id,
+		       COALESCE(a.credentials->>'email', '') AS email,
+		       a.status,
+		       COALESCE(a.error_message, '') AS error_message,
+		       a.temp_unschedulable_until,
+		       COALESCE(a.temp_unschedulable_reason, '') AS temp_reason,
+		       a.schedulable,
+		       a.last_used_at,
+		       a.created_at,
+		       EXTRACT(EPOCH FROM a.updated_at) * 1000 AS updated_ms
+		FROM accounts a
+		WHERE a.updated_at > $1
+		  AND a.deleted_at IS NULL
+		  AND a.platform = 'openai'
+		ORDER BY a.updated_at ASC
+		LIMIT $2`, since, sinkBatchSize)
+	if err != nil {
+		log.Printf("[UsageSink] poll account changes: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var out []SinkAccountSnapshot
+	for rows.Next() {
+		var snap SinkAccountSnapshot
+		var tempUntil sql.NullTime
+		var lastUsed sql.NullTime
+		var createdAt time.Time
+		var updatedMs float64
+
+		if err := rows.Scan(
+			&snap.AccountID, &snap.ChatgptAccountID, &snap.Email,
+			&snap.Status, &snap.ErrorMessage,
+			&tempUntil, &snap.TempUnschedulableReason,
+			&snap.Schedulable,
+			&lastUsed, &createdAt,
+			&updatedMs,
+		); err != nil {
+			continue
+		}
+		snap.InstanceID = s.cfg.Gateway.UsageSink.InstanceID
+		snap.AccountCreatedAt = createdAt.UnixMilli()
+		snap.SnapshottedAt = int64(updatedMs) // use updated_at as watermark
+		if tempUntil.Valid {
+			ms := tempUntil.Time.UnixMilli()
+			snap.TempUnschedulableUntil = &ms
+		}
+		if lastUsed.Valid {
+			ms := lastUsed.Time.UnixMilli()
+			snap.LastUsedAt = &ms
+		}
+		out = append(out, snap)
+	}
+	return out
+}
+
+// syncFullSnapshot pushes a complete account list with all-time total_cost.
+// Run once at startup and every hour as a baseline.
+func (s *UsageSinkService) syncFullSnapshot() {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -228,7 +332,7 @@ func (s *UsageSinkService) syncSnapshots() {
 		WHERE a.deleted_at IS NULL AND a.platform = 'openai'
 		ORDER BY a.id`)
 	if err != nil {
-		log.Printf("[UsageSink] sync snapshots: %v", err)
+		log.Printf("[UsageSink] full snapshot: %v", err)
 		return
 	}
 	defer rows.Close()
