@@ -29,10 +29,10 @@ type SinkRequestEvent struct {
 	CreatedAt        int64   `json:"created_at"` // unix ms
 }
 
-// SinkAccountSnapshot is the current state of one account.
+// SinkAccountEvent is the current state of one account.
 // Used for incremental updated_at polling — TotalCost is not included;
 // ops-assistant computes total_cost by summing pushed request events.
-type SinkAccountSnapshot struct {
+type SinkAccountEvent struct {
 	InstanceID              string `json:"instance_id"`
 	AccountID               int64  `json:"account_id"`
 	ChatgptAccountID        string `json:"chatgpt_account_id,omitempty"`
@@ -44,12 +44,12 @@ type SinkAccountSnapshot struct {
 	Schedulable             bool   `json:"schedulable"`
 	LastUsedAt              *int64 `json:"last_used_at,omitempty"`
 	AccountCreatedAt        int64  `json:"account_created_at"`
-	SnapshottedAt           int64  `json:"snapshotted_at"`
+	UpdatedAt           int64  `json:"updated_at"`
 }
 
 type sinkPayload struct {
-	Events    []SinkRequestEvent    `json:"events,omitempty"`
-	Snapshots []SinkAccountSnapshot `json:"snapshots,omitempty"`
+	Events   []SinkRequestEvent `json:"events,omitempty"`
+	Accounts []SinkAccountEvent `json:"accounts,omitempty"`
 }
 
 // UsageSinkService polls usage_logs, ops_error_logs and accounts for changes,
@@ -155,8 +155,8 @@ func (s *UsageSinkService) drainAccountChanges(lastAt *time.Time) {
 		if len(batch) == 0 {
 			return
 		}
-		s.push(sinkPayload{Snapshots: batch})
-		*lastAt = time.UnixMilli(batch[len(batch)-1].SnapshottedAt)
+		s.push(sinkPayload{Accounts: batch})
+		*lastAt = time.UnixMilli(batch[len(batch)-1].UpdatedAt)
 		if len(batch) < sinkBatchSize {
 			return
 		}
@@ -233,7 +233,7 @@ func (s *UsageSinkService) pollErrorLogs(ctx context.Context, since time.Time) [
 }
 
 // pollAccountChanges returns accounts whose updated_at > since (status changes).
-func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Time) []SinkAccountSnapshot {
+func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Time) []SinkAccountEvent {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT a.id,
 		       COALESCE(a.credentials->>'chatgpt_account_id', '') AS chatgpt_account_id,
@@ -258,9 +258,9 @@ func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Ti
 	}
 	defer rows.Close()
 
-	var out []SinkAccountSnapshot
+	var out []SinkAccountEvent
 	for rows.Next() {
-		var snap SinkAccountSnapshot
+		var snap SinkAccountEvent
 		var tempUntil sql.NullTime
 		var lastUsed sql.NullTime
 		var createdAt time.Time
@@ -278,7 +278,7 @@ func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Ti
 		}
 		snap.InstanceID = s.cfg.Gateway.UsageSink.InstanceID
 		snap.AccountCreatedAt = createdAt.UnixMilli()
-		snap.SnapshottedAt = int64(updatedMs) // use updated_at as watermark
+		snap.UpdatedAt = int64(updatedMs) // use updated_at as watermark
 		if tempUntil.Valid {
 			ms := tempUntil.Time.UnixMilli()
 			snap.TempUnschedulableUntil = &ms
