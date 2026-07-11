@@ -598,6 +598,14 @@ func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (s *adminServiceImpl) PurgeDeletedAccounts(ctx context.Context) (int64, error) {
+	return s.accountRepo.PurgeDeletedAccounts(ctx)
+}
+
+func (s *adminServiceImpl) PurgeLogsBefore(ctx context.Context, before time.Time) (int64, error) {
+	return s.accountRepo.PurgeLogsBefore(ctx, before)
+}
+
 func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int64) (*Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
