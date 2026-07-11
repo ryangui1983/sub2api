@@ -209,7 +209,7 @@ func (s *UsageSinkService) syncSnapshots() {
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT a.id,
-		       COALESCE(a.credentials->>'chatgpt_account_id', '')  AS chatgpt_account_id,
+		       COALESCE(a.credentials->>'chatgpt_account_id', '') AS chatgpt_account_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       a.status,
 		       COALESCE(a.error_message, '') AS error_message,
@@ -218,12 +218,13 @@ func (s *UsageSinkService) syncSnapshots() {
 		       a.schedulable,
 		       a.last_used_at,
 		       a.created_at,
-		       COALESCE((
-		           SELECT SUM(ul.actual_cost) FROM usage_logs ul
-		           WHERE ul.account_id = a.id
-		           AND ul.created_at > NOW() - INTERVAL '30 days'
-		       ), 0) AS total_cost_30d
+		       COALESCE(cost.total, 0) AS total_cost
 		FROM accounts a
+		LEFT JOIN (
+		    SELECT account_id, SUM(actual_cost) AS total
+		    FROM usage_logs
+		    GROUP BY account_id
+		) cost ON cost.account_id = a.id
 		WHERE a.deleted_at IS NULL AND a.platform = 'openai'
 		ORDER BY a.id`)
 	if err != nil {
