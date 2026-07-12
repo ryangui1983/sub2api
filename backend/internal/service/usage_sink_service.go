@@ -17,17 +17,18 @@ const sinkBatchSize = 500 // records per DB query batch
 
 // SinkRequestEvent is a single request event (success or failure) pushed to ops-assistant.
 type SinkRequestEvent struct {
-	InstanceID       string  `json:"instance_id"`
-	AccountID        int64   `json:"account_id"`
-	RequestID        string  `json:"request_id,omitempty"`
-	ChatgptUserID    string  `json:"chatgpt_user_id,omitempty"`
-	Email            string  `json:"email,omitempty"`
-	Success          bool    `json:"success"`
-	StatusCode       int     `json:"status_code,omitempty"`
-	ActualCost       float64 `json:"actual_cost"`
-	ErrorCode        string  `json:"error_code,omitempty"`
-	ErrorDetail      string  `json:"error_detail,omitempty"`
-	CreatedAt        int64   `json:"created_at"` // unix ms
+	InstanceID           string  `json:"instance_id"`
+	AccountID            int64   `json:"account_id"`
+	RequestID            string  `json:"request_id,omitempty"`
+	ChatgptUserID        string  `json:"chatgpt_user_id,omitempty"`
+	ChatgptAccountID     string  `json:"chatgpt_account_id,omitempty"`
+	Email                string  `json:"email,omitempty"`
+	Success              bool    `json:"success"`
+	StatusCode           int     `json:"status_code,omitempty"`
+	ActualCost           float64 `json:"actual_cost"`
+	ErrorCode            string  `json:"error_code,omitempty"`
+	ErrorDetail          string  `json:"error_detail,omitempty"`
+	CreatedAt            int64   `json:"created_at"` // unix ms
 }
 
 // SinkAccountEvent is the current state of one account.
@@ -36,7 +37,8 @@ type SinkRequestEvent struct {
 type SinkAccountEvent struct {
 	InstanceID              string `json:"instance_id"`
 	AccountID               int64  `json:"account_id"`
-	ChatgptUserID         string `json:"chatgpt_user_id,omitempty"`
+	ChatgptUserID           string `json:"chatgpt_user_id,omitempty"`
+	ChatgptAccountID        string `json:"chatgpt_account_id,omitempty"`
 	Email                   string `json:"email,omitempty"`
 	Status                  string `json:"status"`
 	ErrorMessage            string `json:"error_message,omitempty"`
@@ -177,6 +179,7 @@ func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) [
 		SELECT ul.account_id,
 		       COALESCE(ul.request_id, '') AS request_id,
 		       COALESCE(a.credentials->>'chatgpt_user_id', '') AS chatgpt_user_id,
+		       COALESCE(a.credentials->>'chatgpt_account_id', '') AS chatgpt_account_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       ul.total_cost,
 		       EXTRACT(EPOCH FROM ul.created_at) * 1000 AS created_ms
@@ -195,7 +198,7 @@ func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) [
 	for rows.Next() {
 		var e SinkRequestEvent
 		var ms float64
-		if err := rows.Scan(&e.AccountID, &e.RequestID, &e.ChatgptUserID, &e.Email, &e.ActualCost, &ms); err != nil {
+		if err := rows.Scan(&e.AccountID, &e.RequestID, &e.ChatgptUserID, &e.ChatgptAccountID, &e.Email, &e.ActualCost, &ms); err != nil {
 			continue
 		}
 		e.InstanceID = s.cfg.Gateway.UsageSink.InstanceID
@@ -212,6 +215,7 @@ func (s *UsageSinkService) pollErrorLogs(ctx context.Context, since time.Time) [
 		SELECT oel.account_id,
 		       COALESCE(oel.request_id, '') AS request_id,
 		       COALESCE(a.credentials->>'chatgpt_user_id', '') AS chatgpt_user_id,
+		       COALESCE(a.credentials->>'chatgpt_account_id', '') AS chatgpt_account_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       COALESCE(oel.upstream_status_code, oel.status_code, 0) AS status_code,
 		       COALESCE(oel.provider_error_code, '') AS error_code,
@@ -232,7 +236,7 @@ func (s *UsageSinkService) pollErrorLogs(ctx context.Context, since time.Time) [
 	for rows.Next() {
 		var e SinkRequestEvent
 		var ms float64
-		if err := rows.Scan(&e.AccountID, &e.RequestID, &e.ChatgptUserID, &e.Email, &e.StatusCode, &e.ErrorCode, &e.ErrorDetail, &ms); err != nil {
+		if err := rows.Scan(&e.AccountID, &e.RequestID, &e.ChatgptUserID, &e.ChatgptAccountID, &e.Email, &e.StatusCode, &e.ErrorCode, &e.ErrorDetail, &ms); err != nil {
 			continue
 		}
 		e.InstanceID = s.cfg.Gateway.UsageSink.InstanceID
@@ -248,6 +252,7 @@ func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Ti
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT a.id,
 		       COALESCE(a.credentials->>'chatgpt_user_id', '') AS chatgpt_user_id,
+		       COALESCE(a.credentials->>'chatgpt_account_id', '') AS chatgpt_account_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
 		       a.status,
 		       COALESCE(a.error_message, '') AS error_message,
@@ -278,7 +283,7 @@ func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Ti
 		var updatedMs float64
 
 		if err := rows.Scan(
-			&snap.AccountID, &snap.ChatgptUserID, &snap.Email,
+			&snap.AccountID, &snap.ChatgptUserID, &snap.ChatgptAccountID, &snap.Email,
 			&snap.Status, &snap.ErrorMessage,
 			&tempUntil, &snap.TempUnschedulableReason,
 			&snap.Schedulable,
