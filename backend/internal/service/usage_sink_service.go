@@ -94,9 +94,11 @@ func (s *UsageSinkService) run() {
 		interval = 10 * time.Second
 	}
 
-	var lastEventAt time.Time
-	var lastErrorAt time.Time
-	var lastAccountAt time.Time
+	// Start from now — history is synced separately via migration script.
+	now := time.Now()
+	lastEventAt := now
+	lastErrorAt := now
+	lastAccountAt := now
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -122,7 +124,9 @@ func (s *UsageSinkService) drainUsageLogs(lastAt *time.Time) {
 		if len(batch) == 0 {
 			return
 		}
-		s.push(sinkPayload{Events: batch})
+		if !s.push(sinkPayload{Events: batch}) {
+			return // push failed — keep watermark, retry next tick
+		}
 		*lastAt = time.UnixMilli(batch[len(batch)-1].CreatedAt)
 		if len(batch) < sinkBatchSize {
 			return // caught up
@@ -139,7 +143,9 @@ func (s *UsageSinkService) drainErrorLogs(lastAt *time.Time) {
 		if len(batch) == 0 {
 			return
 		}
-		s.push(sinkPayload{Events: batch})
+		if !s.push(sinkPayload{Events: batch}) {
+			return
+		}
 		*lastAt = time.UnixMilli(batch[len(batch)-1].CreatedAt)
 		if len(batch) < sinkBatchSize {
 			return
@@ -156,7 +162,9 @@ func (s *UsageSinkService) drainAccountChanges(lastAt *time.Time) {
 		if len(batch) == 0 {
 			return
 		}
-		s.push(sinkPayload{Accounts: batch})
+		if !s.push(sinkPayload{Accounts: batch}) {
+			return
+		}
 		*lastAt = time.UnixMilli(batch[len(batch)-1].UpdatedAt)
 		if len(batch) < sinkBatchSize {
 			return
@@ -295,14 +303,14 @@ func (s *UsageSinkService) pollAccountChanges(ctx context.Context, since time.Ti
 	return out
 }
 
-func (s *UsageSinkService) push(payload sinkPayload) {
+func (s *UsageSinkService) push(payload sinkPayload) bool {
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return
+		return false
 	}
 	req, err := http.NewRequest(http.MethodPost, s.cfg.Gateway.UsageSink.URL+"/internal/sub2/events", bytes.NewReader(data))
 	if err != nil {
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if s.cfg.Gateway.UsageSink.Token != "" {
@@ -311,10 +319,12 @@ func (s *UsageSinkService) push(payload sinkPayload) {
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		log.Printf("[UsageSink] push error: %v", err)
-		return
+		return false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		log.Printf("[UsageSink] push returned %d", resp.StatusCode)
+		return false
 	}
+	return true
 }
