@@ -178,7 +178,7 @@ func (s *UsageSinkService) pollUsageLogs(ctx context.Context, since time.Time) [
 		       COALESCE(ul.request_id, '') AS request_id,
 		       COALESCE(a.credentials->>'chatgpt_user_id', '') AS chatgpt_user_id,
 		       COALESCE(a.credentials->>'email', '') AS email,
-		       ul.actual_cost,
+		       ul.total_cost,
 		       EXTRACT(EPOCH FROM ul.created_at) * 1000 AS created_ms
 		FROM usage_logs ul
 		LEFT JOIN accounts a ON a.id = ul.account_id
