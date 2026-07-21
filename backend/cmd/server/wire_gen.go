@@ -615,7 +615,6 @@ func provideCleanup(
 				if burnPromote != nil {
 					burnPromote.Stop()
 				}
-				}
 				return nil
 			}},
 		}
