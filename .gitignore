@@ -13,7 +13,9 @@ docs/claude-relay-service/
 backend/bin/
 backend/server
 backend/sub2api
+backend/sub2api_linux
 backend/main
+*.zip
 
 # Go 测试二进制
 *.test
