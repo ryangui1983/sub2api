@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -321,7 +322,18 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		lastDownstreamWriteAt = time.Now()
 	}
 
-	needModelReplace := originalModel != mappedModel
+	// 根据 HideInResponse 标志决定是否需要改写模型名
+	// - HideInResponse = true：需要改写（隐藏映射，显示原始模型）
+	// - HideInResponse = false 或未设置：不改写（保持上游返回的模型名）
+	hideInResponse := false
+	if v := ctx.Value(ctxkey.ChannelMappingHideInResponse); v != nil {
+		if b, ok := v.(bool); ok {
+			hideInResponse = b
+		}
+	}
+	clientModel := mappedResponseModel(ctx, originalModel)
+	needModelReplace := hideInResponse && clientModel != "" && mappedModel != "" && clientModel != mappedModel
+
 	streamOutputAccumulator := apicompat.NewBufferedResponseAccumulator()
 	streamImageOutputs := make([]json.RawMessage, 0, 1)
 	streamSeenImages := make(map[string]struct{})
@@ -584,7 +596,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			// Replace model in response if needed.
 			// Fast path: most events do not contain model field values.
 			if needModelReplace && mappedModel != "" && strings.Contains(line, mappedModel) {
-				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
+				line = s.replaceModelInSSELine(line, mappedModel, clientModel)
 			}
 			startsClientOutput := forceFlushFailedEvent || openAIStreamDataStartsClientOutput(data, eventType)
 			startsVisibleOutput := openAIStreamDataStartsVisibleOutput(data, eventType)
@@ -1250,6 +1262,12 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	if err != nil {
 		return nil, err
 	}
+
+	// Debug logging for account 19166 - print raw upstream response body
+	if account != nil && account.ID == 19166 {
+		logger.LegacyPrintf("service.openai_gateway", "[DEBUG] Account 19166 raw response body: account_id=%d model=%s body=%s", account.ID, originalModel, string(body))
+	}
+
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -1264,7 +1282,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// Some OpenAI-compatible upstreams (including other sub2api instances)
 	// may return SSE even when stream=false was requested.
 	if isEventStreamResponse(resp.Header) {
-		return s.handleSSEToJSON(resp, c, account, body, originalModel, mappedModel)
+		return s.handleSSEToJSON(ctx, resp, c, account, body, originalModel, mappedModel)
 	}
 	// bodyLooksLikeSSE is a line-level heuristic: real SSE framing requires
 	// "data:"/"event:" field names at the very start of a physical line. A
@@ -1280,7 +1298,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// positives on JSON responses that coincidentally contain "data:" or
 	// "event:" in their text content.
 	if account.Type == AccountTypeOAuth && bodyLooksLikeSSE {
-		return s.handleSSEToJSON(resp, c, account, body, originalModel, mappedModel)
+		return s.handleSSEToJSON(ctx, resp, c, account, body, originalModel, mappedModel)
 	}
 	if account != nil && account.IsGrok() && isOpenAIResponsesCompactPath(c) {
 		body, err = convertGrokResponseToOpenAICompact(body)
@@ -1292,16 +1310,26 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
 	if !usageOK {
 		if bodyLooksLikeSSE {
-			return s.handleSSEToJSON(resp, c, account, body, originalModel, mappedModel)
+			return s.handleSSEToJSON(ctx, resp, c, account, body, originalModel, mappedModel)
 		}
 		return nil, fmt.Errorf("parse response: invalid json response")
 	}
 	usage := &usageValue
 
-	// Replace model in response if needed
-	if originalModel != mappedModel {
-		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
+	// 根据 HideInResponse 标志决定是否需要改写模型名
+	// - HideInResponse = true：需要改写（隐藏映射，显示原始模型）
+	// - HideInResponse = false 或未设置：不改写（保持上游返回的模型名）
+	hideInResponse := false
+	if v := ctx.Value(ctxkey.ChannelMappingHideInResponse); v != nil {
+		if b, ok := v.(bool); ok {
+			hideInResponse = b
+		}
 	}
+	clientModel := mappedResponseModel(ctx, originalModel)
+	if hideInResponse && clientModel != "" && mappedModel != "" && clientModel != mappedModel {
+		body = s.replaceModelInResponseBody(body, mappedModel, clientModel)
+	}
+
 	body, err = restoreGrokResponsesClientToolPayload(c, body)
 	if err != nil {
 		return nil, fmt.Errorf("restore Grok Responses client tool response: %w", err)
@@ -1357,7 +1385,7 @@ func bodyHasSSEFraming(body []byte) bool {
 	return false
 }
 
-func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 
@@ -1378,8 +1406,16 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		}
 		finalResponse = supplementCompactionItemFromSSE(c, finalResponse, bodyText)
 		body = finalResponse
-		if originalModel != mappedModel {
-			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
+		// 根据 HideInResponse 标志决定是否需要改写模型名
+		hideInResponse := false
+		if v := ctx.Value(ctxkey.ChannelMappingHideInResponse); v != nil {
+			if b, ok := v.(bool); ok {
+				hideInResponse = b
+			}
+		}
+		clientModel := mappedResponseModel(ctx, originalModel)
+		if hideInResponse && clientModel != "" && mappedModel != "" && clientModel != mappedModel {
+			body = s.replaceModelInResponseBody(body, mappedModel, clientModel)
 		}
 		// Correct tool calls in final response
 		body = s.correctToolCallsInResponseBody(body)
@@ -1402,8 +1438,16 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
 		}
 		usage = s.parseSSEUsageFromBody(bodyText)
-		if originalModel != mappedModel {
-			bodyText = s.replaceModelInSSEBody(bodyText, mappedModel, originalModel)
+		// 根据 HideInResponse 标志决定是否需要改写模型名
+		hideInResponse := false
+		if v := ctx.Value(ctxkey.ChannelMappingHideInResponse); v != nil {
+			if b, ok := v.(bool); ok {
+				hideInResponse = b
+			}
+		}
+		clientModel := mappedResponseModel(ctx, originalModel)
+		if hideInResponse && clientModel != "" && mappedModel != "" && clientModel != mappedModel {
+			bodyText = s.replaceModelInSSEBody(bodyText, mappedModel, clientModel)
 		}
 		body = []byte(bodyText)
 	}

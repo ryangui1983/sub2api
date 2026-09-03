@@ -122,6 +122,14 @@ func openAIModelMappedBody(body []byte, mapped bool, mappedModel string, replace
 	return replace(body, mappedModel)
 }
 
+func bindChannelMappingContext(ctx context.Context, requestedModel string, mapping service.ChannelMappingResult) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = service.EnsureRequestedPublicModel(ctx, requestedModel)
+	return context.WithValue(ctx, ctxkey.ChannelMappingHideInResponse, mapping.HideInResponse)
+}
+
 func seedOpenAIForwardImageIntentHint(c *gin.Context, channelMapped bool, imageIntent bool) {
 	if channelMapped {
 		// 渠道映射改变了规范请求，保持 unknown，由 Forward 按映射后的 model/body 初始化。
@@ -435,11 +443,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	if channelMapping.Mapped {
 		forwardModel = channelMapping.MappedModel
 	}
-	c.Request = c.Request.WithContext(service.WithOpenAIForwardModel(
-		c.Request.Context(),
-		forwardModel,
-		legacyCompact,
-	))
+
+	// 将渠道映射的 HideInResponse 标志存入 context，供响应处理时使用
+	ctx := bindChannelMappingContext(c.Request.Context(), reqModel, channelMapping)
+	ctx = service.WithOpenAIForwardModel(ctx, forwardModel, legacyCompact)
+	c.Request = c.Request.WithContext(ctx)
 
 	// 提前校验 function_call_output 是否具备可关联上下文，避免上游 400。
 	if !h.validateFunctionCallOutputRequest(c, body, reqLog) {
@@ -1033,6 +1041,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	// 解析渠道级模型映射
 	channelMappingMsg, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 	mappedBodyForMessages := newOpenAIModelMappedBodyCache(body, h.gatewayService.ReplaceModelInBody)
+
+	// 将渠道映射的 HideInResponse 标志存入 context，供响应处理时使用
+	c.Request = c.Request.WithContext(bindChannelMappingContext(c.Request.Context(), reqModel, channelMappingMsg))
 
 	// 绑定错误透传服务，允许 service 层在非 failover 错误场景复用规则。
 	if h.errorPassthroughService != nil {
@@ -1828,6 +1839,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	// 解析渠道级模型映射
 	channelMappingWS, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, reqModel)
 
+	// 将渠道映射的 HideInResponse 标志存入 context，供响应处理时使用
+	ctx = bindChannelMappingContext(ctx, reqModel, channelMappingWS)
+
 	var currentUserRelease func()
 	var currentAccountRelease func()
 	releaseAccountSlot := func() {
@@ -2158,6 +2172,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					return "", newOpenAIWSUnsupportedModelSwitchError(mapping.MappedModel)
 				}
 				turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{turn: turn, mapping: mapping})
+
+				// 更新 context 中的 HideInResponse 标志（每个 turn 可能不同）
+				ctx = bindChannelMappingContext(ctx, model, mapping)
+
 				return mapping.MappedModel, nil
 			},
 			BeforeTurn: func(turn int) error {

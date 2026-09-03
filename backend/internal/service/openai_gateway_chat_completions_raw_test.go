@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -50,6 +51,24 @@ func TestBuildOpenAIChatCompletionsURL(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestHideMappedModelInChatJSONUsesRequestedPublicModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx := EnsureRequestedPublicModel(c.Request.Context(), "gpt-5.6-sol")
+	ctx = context.WithValue(ctx, ctxkey.ChannelMappingHideInResponse, true)
+	c.Request = c.Request.WithContext(ctx)
+
+	body := []byte(`{"id":"chatcmpl_1","object":"chat.completion","model":"gpt-5.6-luna","choices":[]}`)
+	got := hideMappedModelInChatJSON(c, body, "gpt-5.6-luna", "gpt-5.6-luna", "gpt-5.6-luna")
+	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(got, "model").String())
+
+	c.Request = c.Request.WithContext(EnsureRequestedPublicModel(context.Background(), "gpt-5.6-sol"))
+	unchanged := hideMappedModelInChatJSON(c, body, "gpt-5.6-luna", "gpt-5.6-luna", "gpt-5.6-luna")
+	require.Equal(t, "gpt-5.6-luna", gjson.GetBytes(unchanged, "model").String())
 }
 
 // TestBuildOpenAIResponsesURL_ProbeURL 锁定 probe/测试端点使用的 URL 构建逻辑，

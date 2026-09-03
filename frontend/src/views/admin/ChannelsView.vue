@@ -383,37 +383,73 @@
               >
                 {{ t('admin.channels.form.noMappingRules', 'No mapping rules. Click "Add" to create one.') }}
               </div>
-              <div v-else class="space-y-1">
-                <div
-                  v-for="(_, srcModel) in section.model_mapping"
-                  :key="srcModel"
-                  class="flex items-center gap-2"
-                >
-                  <input
-                    :value="srcModel"
-                    type="text"
-                    class="input flex-1 text-xs"
-                    :class="platformTextClass(section.platform)"
-                    :placeholder="t('admin.channels.form.mappingSource', 'Source model')"
-                    @change="renameMappingKey(sIdx, srcModel, ($event.target as HTMLInputElement).value)"
-                  />
-                  <span class="text-gray-400 text-xs">→</span>
-                  <input
-                    :value="section.model_mapping[srcModel]"
-                    type="text"
-                    class="input flex-1 text-xs"
-                    :class="platformTextClass(section.platform)"
-                    :placeholder="t('admin.channels.form.mappingTarget', 'Target model')"
-                    @input="section.model_mapping[srcModel] = ($event.target as HTMLInputElement).value"
-                  />
-                  <button
-                    type="button"
-                    @click="removeMappingEntry(sIdx, srcModel)"
-                    class="rounded p-0.5 text-gray-400 hover:text-red-500"
-                  >
-                    <Icon name="trash" size="sm" />
-                  </button>
-                </div>
+              <div v-else class="overflow-x-auto">
+                <table class="w-full text-xs">
+                  <thead>
+                    <tr class="border-b border-gray-200 dark:border-dark-700">
+                      <th class="px-2 py-1.5 text-left font-medium text-gray-700 dark:text-gray-300">{{ t('admin.channels.form.mappingSource', 'Source') }}</th>
+                      <th class="px-2 py-1.5 text-left font-medium text-gray-700 dark:text-gray-300">{{ t('admin.channels.form.mappingTarget', 'Target') }}</th>
+                      <th class="px-2 py-1.5 text-left font-medium text-gray-700 dark:text-gray-300">{{ t('admin.channels.form.mappingRate', 'Rate (%)') }}</th>
+                      <th class="px-2 py-1.5 text-left font-medium text-gray-700 dark:text-gray-300">{{ t('admin.channels.form.mappingHide', 'Hide in Response') }}</th>
+                      <th class="w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="(rule, srcModel) in section.model_mapping"
+                      :key="srcModel"
+                      class="border-b border-gray-100 dark:border-dark-800"
+                    >
+                      <td class="px-2 py-1.5">
+                        <input
+                          :value="srcModel"
+                          type="text"
+                          class="input text-xs w-full"
+                          :class="platformTextClass(section.platform)"
+                          placeholder="gpt-4"
+                          @change="renameMappingKey(sIdx, srcModel, ($event.target as HTMLInputElement).value)"
+                        />
+                      </td>
+                      <td class="px-2 py-1.5">
+                        <input
+                          v-model="rule.target"
+                          type="text"
+                          class="input text-xs w-full"
+                          :class="platformTextClass(section.platform)"
+                          placeholder="gpt-4o"
+                        />
+                      </td>
+                      <td class="px-2 py-1.5">
+                        <input
+                          v-model.number="rule.rate"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="1"
+                          class="input text-xs w-20"
+                          placeholder="100"
+                        />
+                      </td>
+                      <td class="px-2 py-1.5 text-center">
+                        <input
+                          v-model="rule.hide_in_response"
+                          type="checkbox"
+                          class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          :title="t('admin.channels.form.mappingHideHint', 'Keep original model name in the client response')"
+                        />
+                      </td>
+                      <td class="px-2 py-1.5">
+                        <button
+                          type="button"
+                          @click="removeMappingEntry(sIdx, srcModel)"
+                          class="rounded p-0.5 text-gray-400 hover:text-red-500"
+                        >
+                          <Icon name="trash" size="sm" />
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
 
@@ -677,12 +713,18 @@ interface FormPricingRule {
 }
 
 // ── Platform Section type ──
+interface ModelMappingRule {
+  target: string
+  rate?: number
+  hide_in_response?: boolean
+}
+
 interface PlatformSection {
   platform: GroupPlatform
   enabled: boolean
   collapsed: boolean
   group_ids: number[]
-  model_mapping: Record<string, string>
+  model_mapping: Record<string, ModelMappingRule>
   model_pricing: PricingFormEntry[]
   web_search_emulation: boolean
   codex_image_generation_bridge: boolean
@@ -931,7 +973,7 @@ function addMappingEntry(sectionIdx: number) {
     key = `model-${i}`
     i++
   }
-  mapping[key] = ''
+  mapping[key] = { target: '', rate: 100, hide_in_response: false }
 }
 
 function removeMappingEntry(sectionIdx: number, key: string) {
@@ -1096,10 +1138,10 @@ function accountStatsRulesToAPI(): AccountStatsPricingRule[] {
 }
 
 // ── Form ↔ API conversion ──
-function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[], model_mapping: Record<string, Record<string, string>>, features_config: Record<string, unknown> } {
+function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[], model_mapping: Record<string, Record<string, ModelMappingRule>>, features_config: Record<string, unknown> } {
   const group_ids: number[] = []
   const model_pricing: ChannelModelPricing[] = []
-  const model_mapping: Record<string, Record<string, string>> = {}
+  const model_mapping: Record<string, Record<string, ModelMappingRule>> = {}
   // Preserve existing features_config fields not managed by the form
   const featuresConfig: Record<string, unknown> = editingChannel.value?.features_config
     ? { ...editingChannel.value.features_config }
@@ -1109,9 +1151,22 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
     if (!section.enabled) continue
     group_ids.push(...section.group_ids)
 
-    // Model mapping per platform
+    // Model mapping per platform - convert to new format
     if (Object.keys(section.model_mapping).length > 0) {
-      model_mapping[section.platform] = { ...section.model_mapping }
+      const platformMapping: Record<string, ModelMappingRule> = {}
+      for (const [src, rule] of Object.entries(section.model_mapping)) {
+        // 只保存有 target 的映射规则
+        if (rule.target && rule.target.trim() !== '') {
+          platformMapping[src] = {
+            target: rule.target,
+            rate: rule.rate != null && rule.rate > 0 && rule.rate <= 100 ? rule.rate : undefined,
+            hide_in_response: rule.hide_in_response || undefined
+          }
+        }
+      }
+      if (Object.keys(platformMapping).length > 0) {
+        model_mapping[section.platform] = platformMapping
+      }
     }
 
     // Model pricing with platform tag
@@ -1216,7 +1271,22 @@ function apiToForm(channel: Channel): PlatformSection[] {
       return groupPlatform === platform ||
         (groupPlatform === 'composite' && compositePlatforms.includes(platform))
     })
-    const mapping = (channel.model_mapping || {})[platform] || {}
+    const rawMapping = (channel.model_mapping || {})[platform] || {}
+    // 将后端数据转换为前端格式，支持新旧格式
+    const mapping: Record<string, ModelMappingRule> = {}
+    for (const [src, value] of Object.entries(rawMapping)) {
+      if (typeof value === 'string') {
+        // 旧格式：直接是字符串
+        mapping[src] = { target: value, rate: 100, hide_in_response: false }
+      } else if (value && typeof value === 'object' && 'target' in value) {
+        // 新格式：对象
+        mapping[src] = {
+          target: value.target || '',
+          rate: value.rate != null ? value.rate : 100,
+          hide_in_response: value.hide_in_response || false
+        }
+      }
+    }
     const pricing = (channel.model_pricing || [])
       .filter(p => (p.platform || 'anthropic') === platform)
       .map(p => ({

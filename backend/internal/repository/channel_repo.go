@@ -37,7 +37,7 @@ func (r *channelRepository) runInTx(ctx context.Context, fn func(tx *sql.Tx) err
 
 func (r *channelRepository) Create(ctx context.Context, channel *service.Channel) error {
 	return r.runInTx(ctx, func(tx *sql.Tx) error {
-		modelMappingJSON, err := marshalModelMapping(channel.ModelMapping)
+		modelMappingJSON, err := serializeModelMapping(channel)
 		if err != nil {
 			return err
 		}
@@ -96,6 +96,8 @@ func (r *channelRepository) GetByID(ctx context.Context, id int64) (*service.Cha
 		return nil, fmt.Errorf("get channel: %w", err)
 	}
 	ch.ModelMapping = unmarshalModelMapping(modelMappingJSON)
+	ch.ModelMappingRules = unmarshalModelMappingRules(modelMappingJSON)
+
 	ch.FeaturesConfig = unmarshalFeaturesConfig(featuresConfigJSON)
 
 	groupIDs, err := r.GetGroupIDs(ctx, id)
@@ -121,7 +123,7 @@ func (r *channelRepository) GetByID(ctx context.Context, id int64) (*service.Cha
 
 func (r *channelRepository) Update(ctx context.Context, channel *service.Channel) error {
 	return r.runInTx(ctx, func(tx *sql.Tx) error {
-		modelMappingJSON, err := marshalModelMapping(channel.ModelMapping)
+		modelMappingJSON, err := serializeModelMapping(channel)
 		if err != nil {
 			return err
 		}
@@ -237,6 +239,7 @@ func (r *channelRepository) List(ctx context.Context, params pagination.Paginati
 			return nil, nil, fmt.Errorf("scan channel: %w", err)
 		}
 		ch.ModelMapping = unmarshalModelMapping(modelMappingJSON)
+		ch.ModelMappingRules = unmarshalModelMappingRules(modelMappingJSON)
 		ch.FeaturesConfig = unmarshalFeaturesConfig(featuresConfigJSON)
 		channels = append(channels, ch)
 		channelIDs = append(channelIDs, ch.ID)
@@ -324,6 +327,7 @@ func (r *channelRepository) ListAll(ctx context.Context) ([]service.Channel, err
 			return nil, fmt.Errorf("scan channel: %w", err)
 		}
 		ch.ModelMapping = unmarshalModelMapping(modelMappingJSON)
+		ch.ModelMappingRules = unmarshalModelMappingRules(modelMappingJSON)
 		ch.FeaturesConfig = unmarshalFeaturesConfig(featuresConfigJSON)
 		channels = append(channels, ch)
 		channelIDs = append(channelIDs, ch.ID)
@@ -487,6 +491,13 @@ func marshalModelMapping(m map[string]map[string]string) ([]byte, error) {
 	return data, nil
 }
 
+func serializeModelMapping(channel *service.Channel) ([]byte, error) {
+	if channel.ModelMappingRules != nil && len(channel.ModelMappingRules) > 0 {
+		return marshalModelMappingRules(channel.ModelMappingRules)
+	}
+	return marshalModelMapping(channel.ModelMapping)
+}
+
 // unmarshalModelMapping 将 JSON 字节反序列化为嵌套 model mapping
 func unmarshalModelMapping(data []byte) map[string]map[string]string {
 	if len(data) == 0 {
@@ -497,6 +508,155 @@ func unmarshalModelMapping(data []byte) map[string]map[string]string {
 		return nil
 	}
 	return m
+}
+
+// unmarshalModelMappingConfig 智能反序列化模型映射配置（兼容新旧格式）
+// 旧格式：{"platform": {"src": "dst"}}
+// 新格式：{"platform": {"src": {"target": "dst", "rate": 10, "hide_in_response": true}}}
+func unmarshalModelMappingConfig(data []byte) map[string]map[string]*service.ModelMappingRule {
+	if len(data) == 0 {
+		return nil
+	}
+
+	// 尝试解析为新格式
+	var newFormat map[string]map[string]*service.ModelMappingRule
+	if err := json.Unmarshal(data, &newFormat); err == nil {
+		// 检查是否确实是新格式（至少有一个 ModelMappingRule）
+		for _, platformMap := range newFormat {
+			for _, rule := range platformMap {
+				if rule != nil && rule.Target != "" {
+					// 归一化 rate（0 或未设置 → 100）
+					normalizeModelMappingRules(newFormat)
+					return newFormat
+				}
+			}
+		}
+	}
+
+	// 回退到旧格式：{"platform": {"src": "dst"}}
+	var oldFormat map[string]map[string]any
+	if err := json.Unmarshal(data, &oldFormat); err != nil {
+		return nil
+	}
+
+	// 转换为新格式
+	result := make(map[string]map[string]*service.ModelMappingRule)
+	for platform, platformMap := range oldFormat {
+		result[platform] = make(map[string]*service.ModelMappingRule)
+		for src, dst := range platformMap {
+			// dst 可能是字符串（旧格式）或对象（新格式但解析失败）
+			switch v := dst.(type) {
+			case string:
+				// 旧格式：字符串值
+				result[platform][src] = &service.ModelMappingRule{
+					Target:         v,
+					Rate:           service.DefaultMappingRate,
+					HideInResponse: false,
+				}
+			case map[string]any:
+				// 新格式：对象值
+				target, _ := v["target"].(string)
+				rate := float64(service.DefaultMappingRate)
+				if r, ok := v["rate"].(float64); ok {
+					rate = r
+				}
+				hideInResponse, _ := v["hide_in_response"].(bool)
+				result[platform][src] = &service.ModelMappingRule{
+					Target:         target,
+					Rate:           rate,
+					HideInResponse: hideInResponse,
+				}
+			default:
+				// 未知格式，跳过
+				continue
+			}
+		}
+	}
+
+	return result
+}
+
+func unmarshalModelMappingRules(data []byte) map[string]map[string]service.ModelMappingRule {
+	if len(data) == 0 {
+		return nil
+	}
+
+	var nested map[string]map[string]service.ModelMappingRule
+	if err := json.Unmarshal(data, &nested); err == nil && hasNestedMappingTarget(nested) {
+		normalizeNestedMappingRules(nested)
+		return nested
+	}
+
+	config := unmarshalModelMappingConfig(data)
+	if len(config) == 0 {
+		return nil
+	}
+	result := make(map[string]map[string]service.ModelMappingRule, len(config))
+	for platform, platformMapping := range config {
+		converted := make(map[string]service.ModelMappingRule, len(platformMapping))
+		for src, rule := range platformMapping {
+			if rule == nil {
+				continue
+			}
+			copied := *rule
+			if copied.Rate == 0 {
+				copied.Rate = service.DefaultMappingRate
+			}
+			converted[src] = copied
+		}
+		if len(converted) > 0 {
+			result[platform] = converted
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func hasNestedMappingTarget(m map[string]map[string]service.ModelMappingRule) bool {
+	for _, platformMapping := range m {
+		for _, rule := range platformMapping {
+			if strings.TrimSpace(rule.Target) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizeNestedMappingRules(m map[string]map[string]service.ModelMappingRule) {
+	for _, platformMapping := range m {
+		for src, rule := range platformMapping {
+			if rule.Rate == 0 {
+				rule.Rate = service.DefaultMappingRate
+			}
+			platformMapping[src] = rule
+		}
+	}
+}
+
+// normalizeModelMappingRules 归一化映射规则：rate 为 0 时设为默认值 100
+func normalizeModelMappingRules(config map[string]map[string]*service.ModelMappingRule) {
+	for _, platformMap := range config {
+		for _, rule := range platformMap {
+			if rule != nil && rule.Rate == 0 {
+				rule.Rate = service.DefaultMappingRate
+			}
+		}
+	}
+}
+
+// marshalModelMappingRules 序列化渠道级模型映射规则（不分平台）
+func marshalModelMappingRules(m map[string]map[string]service.ModelMappingRule) ([]byte, error) {
+	if len(m) == 0 {
+		return []byte("{}"), nil
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("marshal model_mapping_rules: %w", err)
+	}
+	return data, nil
 }
 
 func marshalFeaturesConfig(m map[string]any) ([]byte, error) {

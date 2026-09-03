@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -85,7 +86,7 @@ type wildcardPricingEntry struct {
 // wildcardMappingEntry 通配符映射条目
 type wildcardMappingEntry struct {
 	prefix string
-	target string
+	rule   *ModelMappingRule
 }
 
 // channelCache 渠道缓存快照（扁平化哈希结构，热路径 O(1) 查找）
@@ -93,7 +94,7 @@ type channelCache struct {
 	// 热路径查找
 	pricingByGroupModel     map[channelModelKey]*ChannelModelPricing            // (groupID, platform, model) → 定价
 	wildcardByGroupPlatform map[channelGroupPlatformKey][]*wildcardPricingEntry // (groupID, platform) → 通配符定价（按配置顺序，先匹配先使用）
-	mappingByGroupModel     map[channelModelKey]string                          // (groupID, platform, model) → 映射目标
+	mappingByGroupModel     map[channelModelKey]*ModelMappingRule               // (groupID, platform, model) → 映射规则
 	wildcardMappingByGP     map[channelGroupPlatformKey][]*wildcardMappingEntry // (groupID, platform) → 通配符映射（按配置顺序，先匹配先使用）
 	channelByGroupID        map[int64]*Channel                                  // groupID → 渠道
 	groupPlatform           map[int64]string                                    // groupID → platform
@@ -109,6 +110,7 @@ type ChannelMappingResult struct {
 	ChannelID          int64  // 渠道 ID（0 = 无渠道关联）
 	Mapped             bool   // 是否发生了映射
 	BillingModelSource string // 计费模型来源（"requested" / "upstream" / "channel_mapped" / "response_model"）
+	HideInResponse     bool   // 是否在响应中隐藏映射
 }
 
 // BuildModelMappingChain 根据映射结果和上游实际模型构建映射链描述。
@@ -205,7 +207,7 @@ func newEmptyChannelCache() *channelCache {
 	return &channelCache{
 		pricingByGroupModel:     make(map[channelModelKey]*ChannelModelPricing),
 		wildcardByGroupPlatform: make(map[channelGroupPlatformKey][]*wildcardPricingEntry),
-		mappingByGroupModel:     make(map[channelModelKey]string),
+		mappingByGroupModel:     make(map[channelModelKey]*ModelMappingRule),
 		wildcardMappingByGP:     make(map[channelGroupPlatformKey][]*wildcardMappingEntry),
 		channelByGroupID:        make(map[int64]*Channel),
 		groupPlatform:           make(map[int64]string),
@@ -244,25 +246,46 @@ func expandPricingToCache(cache *channelCache, ch *Channel, gid int64, platform 
 // 各平台严格独立：antigravity 分组只匹配 antigravity 映射。
 func expandMappingToCache(cache *channelCache, ch *Channel, gid int64, platform string) {
 	for _, mappingPlatform := range matchingPlatforms(platform) {
-		platformMapping, ok := ch.ModelMapping[mappingPlatform]
+		platformMapping, ok := mappingRulesForPlatform(ch, mappingPlatform)
 		if !ok {
 			continue
 		}
-		// 使用映射条目的原始平台作为缓存 key，防止跨平台同名映射冲突
 		gpKey := channelGroupPlatformKey{groupID: gid, platform: mappingPlatform}
-		for src, dst := range platformMapping {
+		for src, rule := range platformMapping {
+			copied := rule
+			if copied.Rate == 0 {
+				copied.Rate = DefaultMappingRate
+			}
 			if strings.HasSuffix(src, "*") {
 				prefix := strings.ToLower(strings.TrimSuffix(src, "*"))
 				cache.wildcardMappingByGP[gpKey] = append(cache.wildcardMappingByGP[gpKey], &wildcardMappingEntry{
 					prefix: prefix,
-					target: dst,
+					rule:   &copied,
 				})
 			} else {
 				key := channelModelKey{groupID: gid, platform: mappingPlatform, model: strings.ToLower(src)}
-				cache.mappingByGroupModel[key] = dst
+				cache.mappingByGroupModel[key] = &copied
 			}
 		}
 	}
+}
+
+func mappingRulesForPlatform(ch *Channel, platform string) (map[string]ModelMappingRule, bool) {
+	if ch.ModelMappingRules != nil {
+		if rules, ok := ch.ModelMappingRules[platform]; ok && len(rules) > 0 {
+			return rules, true
+		}
+	}
+	if ch.ModelMapping != nil {
+		if old, ok := ch.ModelMapping[platform]; ok && len(old) > 0 {
+			out := make(map[string]ModelMappingRule, len(old))
+			for src, dst := range old {
+				out[src] = ModelMappingRule{Target: dst, Rate: DefaultMappingRate}
+			}
+			return out, true
+		}
+	}
+	return nil, false
 }
 
 // storeErrorCache 存入短 TTL 空缓存，防止 DB 错误后紧密重试。
@@ -405,15 +428,15 @@ func (c *channelCache) matchWildcard(groupID int64, platform, modelLower string)
 }
 
 // matchWildcardMapping 在通配符映射中查找匹配项（最先匹配到优先）
-func (c *channelCache) matchWildcardMapping(groupID int64, platform, modelLower string) string {
+func (c *channelCache) matchWildcardMapping(groupID int64, platform, modelLower string) *ModelMappingRule {
 	gpKey := channelGroupPlatformKey{groupID: groupID, platform: platform}
 	wildcards := c.wildcardMappingByGP[gpKey]
 	for _, wc := range wildcards {
 		if strings.HasPrefix(modelLower, wc.prefix) {
-			return wc.target
+			return wc.rule
 		}
 	}
-	return ""
+	return nil
 }
 
 // lookupPricingAcrossPlatforms 在分组平台内查找模型定价。
@@ -437,19 +460,29 @@ func lookupPricingAcrossPlatforms(cache *channelCache, groupID int64, groupPlatf
 
 // lookupMappingAcrossPlatforms 在分组平台内查找模型映射。
 // 逻辑与 lookupPricingAcrossPlatforms 相同：先精确查找，再通配符。
-func lookupMappingAcrossPlatforms(cache *channelCache, groupID int64, groupPlatform, modelLower string) string {
+func lookupMappingAcrossPlatforms(cache *channelCache, groupID int64, groupPlatform, modelLower string) *ModelMappingRule {
 	for _, p := range matchingPlatforms(groupPlatform) {
 		key := channelModelKey{groupID: groupID, platform: p, model: modelLower}
-		if mapped, ok := cache.mappingByGroupModel[key]; ok {
-			return mapped
+		if rule, ok := cache.mappingByGroupModel[key]; ok {
+			return rule
 		}
 	}
 	for _, p := range matchingPlatforms(groupPlatform) {
-		if mapped := cache.matchWildcardMapping(groupID, p, modelLower); mapped != "" {
-			return mapped
+		if rule := cache.matchWildcardMapping(groupID, p, modelLower); rule != nil {
+			return rule
 		}
 	}
-	return ""
+	return nil
+}
+
+func shouldApplyMapping(rate float64) bool {
+	if rate <= 0 {
+		return false
+	}
+	if rate >= 100 {
+		return true
+	}
+	return rand.Intn(100) < int(rate)
 }
 
 // GetChannelForGroup 获取分组关联的渠道（热路径 O(1)）
@@ -576,9 +609,10 @@ func resolveMapping(lk *channelLookup, groupID int64, model string) ChannelMappi
 	}
 
 	modelLower := strings.ToLower(model)
-	if mapped := lookupMappingAcrossPlatforms(lk.cache, groupID, lk.platform, modelLower); mapped != "" {
-		result.MappedModel = mapped
+	if rule := lookupMappingAcrossPlatforms(lk.cache, groupID, lk.platform, modelLower); rule != nil && strings.TrimSpace(rule.Target) != "" && shouldApplyMapping(rule.Rate) {
+		result.MappedModel = rule.Target
 		result.Mapped = true
+		result.HideInResponse = rule.HideInResponse
 	}
 
 	return result
@@ -797,7 +831,7 @@ func (s *ChannelService) Create(ctx context.Context, input *CreateChannelInput) 
 		RestrictModels:             input.RestrictModels,
 		GroupIDs:                   input.GroupIDs,
 		ModelPricing:               input.ModelPricing,
-		ModelMapping:               input.ModelMapping,
+		ModelMappingRules:          input.ModelMapping,
 		Features:                   input.Features,
 		FeaturesConfig:             input.FeaturesConfig,
 		ApplyPricingToAccountStats: input.ApplyPricingToAccountStats,
@@ -905,7 +939,7 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 		channel.ModelPricing = *input.ModelPricing
 	}
 	if input.ModelMapping != nil {
-		channel.ModelMapping = input.ModelMapping
+		channel.ModelMappingRules = input.ModelMapping
 	}
 	if input.BillingModelSource != "" {
 		channel.BillingModelSource = input.BillingModelSource
@@ -1107,7 +1141,7 @@ type CreateChannelInput struct {
 	Description                string
 	GroupIDs                   []int64
 	ModelPricing               []ChannelModelPricing
-	ModelMapping               map[string]map[string]string // platform → {src→dst}
+	ModelMapping               map[string]map[string]ModelMappingRule // platform → {src → rule}
 	BillingModelSource         string
 	RestrictModels             bool
 	Features                   string
@@ -1123,7 +1157,7 @@ type UpdateChannelInput struct {
 	Status                     string
 	GroupIDs                   *[]int64
 	ModelPricing               *[]ChannelModelPricing
-	ModelMapping               map[string]map[string]string // platform → {src→dst}
+	ModelMapping               map[string]map[string]ModelMappingRule // platform → {src → rule}
 	BillingModelSource         string
 	RestrictModels             *bool
 	Features                   *string

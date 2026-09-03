@@ -62,6 +62,12 @@ export interface AccountStatsPricingRule {
   pricing: ChannelModelPricing[]
 }
 
+export interface ModelMappingRule {
+  target: string
+  rate?: number
+  hide_in_response?: boolean
+}
+
 export interface Channel {
   id: number
   name: string
@@ -72,7 +78,7 @@ export interface Channel {
   features_config?: Record<string, unknown>
   group_ids: number[]
   model_pricing: ChannelModelPricing[]
-  model_mapping: Record<string, Record<string, string>> // platform → {src→dst}
+  model_mapping: Record<string, Record<string, string | ModelMappingRule>> // platform → {src→dst or rule}
   apply_pricing_to_account_stats: boolean
   account_stats_pricing_rules: AccountStatsPricingRule[]
   created_at: string
@@ -84,7 +90,7 @@ export interface CreateChannelRequest {
   description?: string
   group_ids?: number[]
   model_pricing?: ChannelModelPricing[]
-  model_mapping?: Record<string, Record<string, string>>
+  model_mapping?: Record<string, Record<string, ModelMappingRule>>
   billing_model_source?: string
   restrict_models?: boolean
   features_config?: Record<string, unknown>
@@ -98,7 +104,7 @@ export interface UpdateChannelRequest {
   status?: string
   group_ids?: number[]
   model_pricing?: ChannelModelPricing[]
-  model_mapping?: Record<string, Record<string, string>>
+  model_mapping?: Record<string, Record<string, ModelMappingRule>>
   billing_model_source?: string
   restrict_models?: boolean
   features_config?: Record<string, unknown>

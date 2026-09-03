@@ -72,6 +72,41 @@ func RequestedPublicModelFromContext(ctx context.Context) (string, bool) {
 	return model, true
 }
 
+func WithRequestedPublicModel(ctx context.Context, model string) context.Context {
+	model = strings.TrimSpace(model)
+	if ctx == nil || model == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxkey.RequestedPublicModel, model)
+}
+
+func EnsureRequestedPublicModel(ctx context.Context, model string) context.Context {
+	if _, ok := RequestedPublicModelFromContext(ctx); ok {
+		return ctx
+	}
+	return WithRequestedPublicModel(ctx, model)
+}
+
+func mappedResponseModel(ctx context.Context, forwardedModel string) string {
+	forwardedModel = strings.TrimSpace(forwardedModel)
+	if ctx == nil {
+		return forwardedModel
+	}
+	hide := false
+	if v := ctx.Value(ctxkey.ChannelMappingHideInResponse); v != nil {
+		if b, ok := v.(bool); ok {
+			hide = b
+		}
+	}
+	if !hide {
+		return forwardedModel
+	}
+	if model, ok := RequestedPublicModelFromContext(ctx); ok {
+		return model
+	}
+	return forwardedModel
+}
+
 func CompositeRouteSourceFromContext(ctx context.Context) (string, bool) {
 	if ctx == nil {
 		return "", false

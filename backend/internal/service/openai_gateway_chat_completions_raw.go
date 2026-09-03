@@ -329,7 +329,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			}
 		}
 
-		writeLine(line)
+		writeLine(hideMappedModelInChatSSELine(c, line, originalModel, billingModel, upstreamModel))
 		if line == "" {
 			if !clientDisconnected && clientOutputStarted {
 				c.Writer.Flush()
@@ -460,6 +460,8 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		return nil, newGrokMissingUsageFailoverError(c, account, upstreamRequestID)
 	}
 
+	respBody = hideMappedModelInChatJSON(c, respBody, originalModel, billingModel, upstreamModel)
+
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
@@ -496,4 +498,29 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 // 与 buildOpenAIResponsesURL 是姐妹函数。
 func buildOpenAIChatCompletionsURL(base string) string {
 	return buildOpenAIEndpointURL(base, "/v1/chat/completions")
+}
+
+func clientFacingModel(c *gin.Context, forwardedModel string) string {
+	if c == nil || c.Request == nil {
+		return strings.TrimSpace(forwardedModel)
+	}
+	return mappedResponseModel(c.Request.Context(), forwardedModel)
+}
+
+func hideMappedModelInChatJSON(c *gin.Context, body []byte, originalModel, billingModel, upstreamModel string) []byte {
+	toModel := clientFacingModel(c, "")
+	fromModel := firstNonEmpty(upstreamModel, billingModel, originalModel)
+	if toModel == "" || fromModel == "" || fromModel == toModel {
+		return body
+	}
+	return (&OpenAIGatewayService{}).replaceModelInResponseBody(body, fromModel, toModel)
+}
+
+func hideMappedModelInChatSSELine(c *gin.Context, line, originalModel, billingModel, upstreamModel string) string {
+	toModel := clientFacingModel(c, "")
+	fromModel := firstNonEmpty(upstreamModel, billingModel, originalModel)
+	if toModel == "" || fromModel == "" || fromModel == toModel {
+		return line
+	}
+	return (&OpenAIGatewayService{}).replaceModelInSSELine(line, fromModel, toModel)
 }

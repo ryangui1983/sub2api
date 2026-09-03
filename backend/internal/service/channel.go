@@ -45,6 +45,16 @@ const (
 	BillingModelSourceResponse = "response_model"
 )
 
+// ModelMappingRule 模型映射规则（支持按比例映射和响应隐藏）
+type ModelMappingRule struct {
+	Target         string  `json:"target"`                     // 映射目标模型
+	Rate           float64 `json:"rate,omitempty"`             // 映射比例 0-100，默认 100（100% 映射）
+	HideInResponse bool    `json:"hide_in_response,omitempty"` // 是否在响应中隐藏映射（返回原始模型名），默认 false
+}
+
+// DefaultMappingRate 默认映射比例（100% 映射）
+const DefaultMappingRate = 100
+
 // Channel 渠道实体
 type Channel struct {
 	ID                 int64
@@ -64,6 +74,8 @@ type Channel struct {
 	ModelPricing []ChannelModelPricing
 	// 渠道级模型映射（按平台分组：platform → {src→dst}）
 	ModelMapping map[string]map[string]string
+	// 渠道级模型映射规则（按平台分组：platform → {src → MappingRule}）
+	ModelMappingRules map[string]map[string]ModelMappingRule
 
 	// 账号统计定价
 	ApplyPricingToAccountStats bool                      // 是否应用渠道模型定价到账号统计

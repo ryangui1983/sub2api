@@ -516,7 +516,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	// accumulated delta events so the client receives the full content.
 	acc.SupplementResponseOutput(finalResponse)
 
-	chatResp := apicompat.ResponsesToChatCompletions(finalResponse, originalModel)
+	chatResp := apicompat.ResponsesToChatCompletions(finalResponse, clientFacingModel(c, originalModel))
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -607,7 +607,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
 
 	state := apicompat.NewResponsesEventToChatState()
-	state.Model = originalModel
+	state.Model = clientFacingModel(c, originalModel)
 	// 网关作为计费链路的一环，不能把下游 usage 输出绑定到客户端是否显式请求。
 	// raw Chat Completions 直转路径已经强制透出 usage，这里保持同样行为，避免级联代理计费为 0。
 	state.IncludeUsage = true

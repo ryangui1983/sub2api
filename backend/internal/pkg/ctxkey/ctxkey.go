@@ -81,4 +81,7 @@ const (
 
 	// ClaudeCodeVersion stores the extracted Claude Code version from User-Agent (e.g. "2.1.22")
 	ClaudeCodeVersion Key = "ctx_claude_code_version"
+
+	// ChannelMappingHideInResponse 标识渠道映射是否需要在响应中隐藏（需求1：映射不下发）
+	ChannelMappingHideInResponse Key = "ctx_channel_mapping_hide_in_response"
 )

@@ -74,3 +74,22 @@ func TestCompositeConcretePlatformsIncludeCNProviders(t *testing.T) {
 		require.True(t, canCopyAccountsFromGroupPlatform(PlatformComposite, platform))
 	}
 }
+
+func TestMappedResponseModelHidesMappedName(t *testing.T) {
+	ctx := EnsureRequestedPublicModel(context.Background(), "gpt-5.6-sol")
+	ctx = context.WithValue(ctx, ctxkey.ChannelMappingHideInResponse, true)
+	require.Equal(t, "gpt-5.6-sol", mappedResponseModel(ctx, "gpt-5.6-luna"))
+}
+
+func TestMappedResponseModelKeepsMappedNameWhenHideDisabled(t *testing.T) {
+	ctx := EnsureRequestedPublicModel(context.Background(), "gpt-5.6-sol")
+	require.Equal(t, "gpt-5.6-luna", mappedResponseModel(ctx, "gpt-5.6-luna"))
+}
+
+func TestEnsureRequestedPublicModelDoesNotOverrideExisting(t *testing.T) {
+	ctx := WithRequestedPublicModel(context.Background(), "gpt-5.6-sol")
+	ctx = EnsureRequestedPublicModel(ctx, "gpt-5.6-luna")
+	model, ok := RequestedPublicModelFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, "gpt-5.6-sol", model)
+}
