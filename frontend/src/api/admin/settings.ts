@@ -1288,6 +1288,29 @@ export async function updateOverloadCooldownSettings(
   return data;
 }
 
+export interface KeywordTempUnschedSettings {
+  enabled: boolean;
+  keywords: string[];
+  duration_minutes: number;
+}
+
+export async function getKeywordTempUnschedSettings(): Promise<KeywordTempUnschedSettings> {
+  const { data } = await apiClient.get<KeywordTempUnschedSettings>(
+    "/admin/settings/keyword-temp-unsched",
+  );
+  return data;
+}
+
+export async function updateKeywordTempUnschedSettings(
+  settings: KeywordTempUnschedSettings,
+): Promise<KeywordTempUnschedSettings> {
+  const { data } = await apiClient.put<KeywordTempUnschedSettings>(
+    "/admin/settings/keyword-temp-unsched",
+    settings,
+  );
+  return data;
+}
+
 // ==================== 429 Rate Limit Cooldown Settings ====================
 
 export interface RateLimit429CooldownSettings {
@@ -1594,6 +1617,8 @@ export const settingsAPI = {
   deleteAdminApiKey,
   getOverloadCooldownSettings,
   updateOverloadCooldownSettings,
+  getKeywordTempUnschedSettings,
+  updateKeywordTempUnschedSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
   getBurnPromoteSettings,

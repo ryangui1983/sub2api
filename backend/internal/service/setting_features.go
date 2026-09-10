@@ -715,6 +715,52 @@ func (s *SettingService) SetOverloadCooldownSettings(ctx context.Context, settin
 	return s.settingRepo.Set(ctx, SettingKeyOverloadCooldownSettings, string(data))
 }
 
+func (s *SettingService) GetKeywordTempUnschedSettings(ctx context.Context) (*KeywordTempUnschedSettings, error) {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyKeywordTempUnschedSettings)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return DefaultKeywordTempUnschedSettings(), nil
+		}
+		return nil, fmt.Errorf("get keyword temp unsched settings: %w", err)
+	}
+	if value == "" {
+		return DefaultKeywordTempUnschedSettings(), nil
+	}
+	var settings KeywordTempUnschedSettings
+	if err := json.Unmarshal([]byte(value), &settings); err != nil {
+		return DefaultKeywordTempUnschedSettings(), nil
+	}
+	settings.Keywords = normalizeKeywordTempUnschedKeywords(settings.Keywords)
+	if settings.DurationMinutes < 1 {
+		settings.DurationMinutes = 1
+	}
+	if settings.DurationMinutes > 120 {
+		settings.DurationMinutes = 120
+	}
+	return &settings, nil
+}
+
+func (s *SettingService) SetKeywordTempUnschedSettings(ctx context.Context, settings *KeywordTempUnschedSettings) error {
+	if settings == nil {
+		return fmt.Errorf("settings cannot be nil")
+	}
+	settings.Keywords = normalizeKeywordTempUnschedKeywords(settings.Keywords)
+	if settings.DurationMinutes < 1 || settings.DurationMinutes > 120 {
+		if settings.Enabled {
+			return fmt.Errorf("duration_minutes must be between 1-120")
+		}
+		settings.DurationMinutes = 5
+	}
+	if settings.Enabled && len(settings.Keywords) == 0 {
+		return fmt.Errorf("keywords cannot be empty when enabled")
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("marshal keyword temp unsched settings: %w", err)
+	}
+	return s.settingRepo.Set(ctx, SettingKeyKeywordTempUnschedSettings, string(data))
+}
+
 // GetRateLimit429CooldownSettings 获取429默认回避配置
 func (s *SettingService) GetRateLimit429CooldownSettings(ctx context.Context) (*RateLimit429CooldownSettings, error) {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyRateLimit429CooldownSettings)

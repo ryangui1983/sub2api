@@ -1609,6 +1609,18 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 	canonicalModel ...string,
 ) (int, bool) {
 	statusCode := openAIStreamFailureStatus(payload, message)
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	if s != nil && s.rateLimitService != nil && account != nil {
+		keywordBody := payload
+		if trimmed := strings.TrimSpace(message); trimmed != "" {
+			keywordBody = append(append([]byte{}, payload...), '\n')
+			keywordBody = append(keywordBody, trimmed...)
+		}
+		_ = s.rateLimitService.HandleKeywordTempUnschedulable(ctx, account, statusCode, keywordBody)
+	}
 	switch statusCode {
 	case http.StatusForbidden:
 		if !openAIStream403AccountFailure(payload, message) {

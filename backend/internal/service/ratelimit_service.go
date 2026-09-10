@@ -326,6 +326,9 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
+	if s.HandleKeywordTempUnschedulable(ctx, account, statusCode, responseBody) {
+		return true
+	}
 	// Team 联动熔断必须先于池模式/自定义错误码/临时不可调度的各类早退；
 	// 同请求内与 fastpath 调用点的重复触发由方法内去重吸收。
 	s.maybeHandleOpenAITeamLinkedError(ctx, account, statusCode, responseBody)
@@ -2199,6 +2202,37 @@ func (s *RateLimitService) GetTempUnschedStatus(ctx context.Context, accountID i
 	}
 
 	return state, nil
+}
+
+func (s *RateLimitService) HandleKeywordTempUnschedulable(ctx context.Context, account *Account, statusCode int, responseBody []byte) bool {
+	if s == nil || account == nil || s.settingService == nil {
+		return false
+	}
+	persistCtx, cancel := openAIAccountStateContext(ctx)
+	defer cancel()
+	settings, err := s.settingService.GetKeywordTempUnschedSettings(persistCtx)
+	if err != nil || settings == nil || !settings.Enabled || len(settings.Keywords) == 0 {
+		return false
+	}
+	body := responseBody
+	if len(body) > tempUnschedBodyMaxBytes {
+		body = body[:tempUnschedBodyMaxBytes]
+	}
+	haystack := strings.ToLower(string(body))
+	if msg := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(responseBody))); msg != "" && !strings.Contains(haystack, msg) {
+		haystack += "\n" + msg
+	}
+	matched := matchTempUnschedKeyword(haystack, settings.Keywords)
+	if matched == "" {
+		return false
+	}
+	rule := TempUnschedulableRule{
+		ErrorCode:       statusCode,
+		Keywords:        []string{matched},
+		DurationMinutes: settings.DurationMinutes,
+		Description:     "keyword_temp_unsched",
+	}
+	return s.triggerTempUnschedulable(persistCtx, account, rule, -1, statusCode, matched, responseBody)
 }
 
 func (s *RateLimitService) HandleTempUnschedulable(ctx context.Context, account *Account, statusCode int, responseBody []byte, requestedModel ...string) bool {

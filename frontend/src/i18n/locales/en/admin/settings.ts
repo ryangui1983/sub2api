@@ -998,6 +998,18 @@ export default {
         saved: 'Overload cooldown settings saved',
         saveFailed: 'Failed to save overload cooldown settings'
       },
+      keywordTempUnsched: {
+        title: 'Keyword Temporary Unschedule',
+        description: 'When an upstream error body matches a keyword, immediately pause that account. Status-code agnostic, and evaluated before per-account rules and the OpenAI capacity-shed skip.',
+        enabled: 'Enable keyword temporary unschedule',
+        enabledHint: 'Pause the account as soon as any keyword matches; it recovers automatically when the duration elapses',
+        keywords: 'Keywords',
+        keywordsHint: 'One per line, case-insensitive match against the upstream error body. Example: currently overloaded',
+        durationMinutes: 'Pause duration (minutes)',
+        durationMinutesHint: 'How long to pause the account (1-120 minutes)',
+        saved: 'Keyword temporary unschedule settings saved',
+        saveFailed: 'Failed to save keyword temporary unschedule settings'
+      },
       rateLimit429Cooldown: {
         title: '429 Default Cooldown',
         description: 'Configure the default account cooldown when upstream returns 429 without an explicit reset time',

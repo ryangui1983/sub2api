@@ -558,6 +558,12 @@ type OverloadCooldownSettings struct {
 	CooldownMinutes int `json:"cooldown_minutes"`
 }
 
+type KeywordTempUnschedSettings struct {
+	Enabled         bool     `json:"enabled"`
+	Keywords        []string `json:"keywords"`
+	DurationMinutes int      `json:"duration_minutes"`
+}
+
 // RateLimit429CooldownSettings 429默认回避配置
 type RateLimit429CooldownSettings struct {
 	// Enabled 是否在无法解析上游重置时间时应用默认429回避
@@ -599,6 +605,41 @@ func DefaultOverloadCooldownSettings() *OverloadCooldownSettings {
 		Enabled:         true,
 		CooldownMinutes: 10,
 	}
+}
+
+func DefaultKeywordTempUnschedSettings() *KeywordTempUnschedSettings {
+	return &KeywordTempUnschedSettings{
+		Enabled:         false,
+		Keywords:        []string{"currently overloaded"},
+		DurationMinutes: 5,
+	}
+}
+
+func normalizeKeywordTempUnschedKeywords(keywords []string) []string {
+	seen := make(map[string]struct{}, len(keywords))
+	out := make([]string, 0, len(keywords))
+	for _, raw := range keywords {
+		keyword := strings.TrimSpace(raw)
+		if keyword == "" {
+			continue
+		}
+		if len(keyword) > 200 {
+			keyword = strings.TrimSpace(keyword[:200])
+			if keyword == "" {
+				continue
+			}
+		}
+		key := strings.ToLower(keyword)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, keyword)
+		if len(out) >= 20 {
+			break
+		}
+	}
+	return out
 }
 
 // DefaultRateLimit429CooldownSettings 返回默认的429回避配置（启用，5秒）

@@ -101,6 +101,11 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if s != nil {
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)
 	}
+	if s != nil && s.rateLimitService != nil && account != nil {
+		if s.rateLimitService.HandleKeywordTempUnschedulable(ctx, account, statusCode, responseBody) {
+			return true
+		}
+	}
 	// Capacity shedding describes this request, not account health. Keep the
 	// account schedulable while the request-local retry budget handles recovery.
 	if account != nil && account.Platform == PlatformOpenAI && isOpenAIRequestScopedCapacityShed("", responseBody) {

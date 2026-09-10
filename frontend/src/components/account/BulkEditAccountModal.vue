@@ -133,6 +133,48 @@
         </div>
       </div>
 
+      <!-- OpenAI 订阅档位（仅 OAuth） -->
+      <div
+        v-if="allOpenAIOAuthOnly"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-openai-plan-type-label"
+              class="input-label mb-0"
+              for="bulk-edit-openai-plan-type-enabled"
+            >
+              {{ t('admin.accounts.openai.planType') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.planTypeDesc') }}
+            </p>
+          </div>
+          <input
+            v-model="enablePlanType"
+            id="bulk-edit-openai-plan-type-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-openai-plan-type-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-openai-plan-type-body"
+          :class="!enablePlanType && 'pointer-events-none opacity-50'"
+          role="group"
+          aria-labelledby="bulk-edit-openai-plan-type-label"
+        >
+          <div class="w-52">
+            <Select
+              id="bulk-edit-openai-plan-type"
+              v-model="bulkPlanType"
+              :options="planTypeOptions"
+            />
+          </div>
+        </div>
+      </div>
+
       <!-- OpenAI API long-context billing -->
       <div
         v-if="allOpenAIPassthroughCapable"
@@ -1611,6 +1653,7 @@ import {
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import {
   buildHeaderOverridesObject,
+  buildPlanTypeOptions,
   isHeaderOverrideCapable,
   validateHeaderOverrideRows,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
@@ -1770,6 +1813,11 @@ const enableStatus = ref(false)
 const enableGroups = ref(false)
 const enableOpenAIPassthrough = ref(false)
 const enableOpenAIFlattenNamespaces = ref(false)
+const enablePlanType = ref(false)
+const bulkPlanType = ref('')
+const planTypeOptions = computed(() =>
+  buildPlanTypeOptions(bulkPlanType.value, t('admin.accounts.openai.planTypeClear'))
+)
 const enableOpenAILongContextBilling = ref(false)
 const enableOpenAIEndpointCapabilities = ref(false)
 const enableOpenAIResponsesMode = ref(false)
@@ -2106,6 +2154,12 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     extra.openai_responses_flatten_namespaces = openaiFlattenNamespacesEnabled.value
   }
 
+  // 批量 JSONB merge 删不掉已有键；空字符串表示清空/自动识别。
+  if (enablePlanType.value && allOpenAIOAuthOnly.value) {
+    credentials.plan_type = bulkPlanType.value.trim()
+    credentialsChanged = true
+  }
+
   if (applyOpenAILongContextBilling) {
     const extra = ensureExtra()
     extra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
@@ -2336,6 +2390,7 @@ const handleSubmit = async () => {
     enableBaseUrl.value ||
     enableOpenAIPassthrough.value ||
     enableOpenAIFlattenNamespaces.value ||
+    (enablePlanType.value && allOpenAIOAuthOnly.value) ||
     (enableOpenAILongContextBilling.value && allOpenAIPassthroughCapable.value) ||
     (enableOpenAIEndpointCapabilities.value && allOpenAIAPIKey.value) ||
     (enableOpenAIResponsesMode.value && allOpenAIAPIKey.value) ||
@@ -2501,6 +2556,8 @@ watch(
       enableGroups.value = false
       enableOpenAIPassthrough.value = false
       enableOpenAIFlattenNamespaces.value = false
+      enablePlanType.value = false
+      bulkPlanType.value = ''
       enableOpenAILongContextBilling.value = false
       enableOpenAIEndpointCapabilities.value = false
       enableOpenAIResponsesMode.value = false

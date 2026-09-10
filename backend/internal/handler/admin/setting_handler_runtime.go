@@ -102,6 +102,52 @@ func (h *SettingHandler) UpdateOverloadCooldownSettings(c *gin.Context) {
 	})
 }
 
+func (h *SettingHandler) GetKeywordTempUnschedSettings(c *gin.Context) {
+	settings, err := h.settingService.GetKeywordTempUnschedSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.KeywordTempUnschedSettings{
+		Enabled:         settings.Enabled,
+		Keywords:        settings.Keywords,
+		DurationMinutes: settings.DurationMinutes,
+	})
+}
+
+type UpdateKeywordTempUnschedSettingsRequest struct {
+	Enabled         bool     `json:"enabled"`
+	Keywords        []string `json:"keywords"`
+	DurationMinutes int      `json:"duration_minutes"`
+}
+
+func (h *SettingHandler) UpdateKeywordTempUnschedSettings(c *gin.Context) {
+	var req UpdateKeywordTempUnschedSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	settings := &service.KeywordTempUnschedSettings{
+		Enabled:         req.Enabled,
+		Keywords:        req.Keywords,
+		DurationMinutes: req.DurationMinutes,
+	}
+	if err := h.settingService.SetKeywordTempUnschedSettings(c.Request.Context(), settings); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	updatedSettings, err := h.settingService.GetKeywordTempUnschedSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.KeywordTempUnschedSettings{
+		Enabled:         updatedSettings.Enabled,
+		Keywords:        updatedSettings.Keywords,
+		DurationMinutes: updatedSettings.DurationMinutes,
+	})
+}
+
 // GetRateLimit429CooldownSettings 获取429默认回避配置
 // GET /api/v1/admin/settings/rate-limit-429-cooldown
 func (h *SettingHandler) GetRateLimit429CooldownSettings(c *gin.Context) {

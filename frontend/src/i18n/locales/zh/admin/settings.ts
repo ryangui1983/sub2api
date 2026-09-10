@@ -992,6 +992,18 @@ export default {
         saved: '过载冷却设置保存成功',
         saveFailed: '保存过载冷却设置失败'
       },
+      keywordTempUnsched: {
+        title: '关键词临时不可调度',
+        description: '上游错误正文命中关键词时，立刻暂停该账号调度。不依赖 HTTP 状态码，优先于账号级规则和 OpenAI 过载跳过逻辑。',
+        enabled: '启用关键词临时不可调度',
+        enabledHint: '命中任一关键词后立即暂停该账号，到期自动恢复',
+        keywords: '关键词',
+        keywordsHint: '每行一个，不区分大小写，匹配上游错误正文。例如 currently overloaded',
+        durationMinutes: '暂停时长（分钟）',
+        durationMinutesHint: '账号暂停调度的持续时间（1-120 分钟）',
+        saved: '关键词临时不可调度设置保存成功',
+        saveFailed: '保存关键词临时不可调度设置失败'
+      },
       rateLimit429Cooldown: {
         title: '429 默认回避',
         description: '配置上游返回 429 且没有明确重置时间时的默认账号回避策略',

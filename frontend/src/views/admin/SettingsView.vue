@@ -304,6 +304,99 @@
             </div>
           </div>
 
+          <!-- Keyword Temporary Unschedule Settings -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.keywordTempUnsched.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.keywordTempUnsched.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div
+                v-if="keywordTempUnschedLoading"
+                class="flex items-center gap-2 text-gray-500"
+              >
+                <div
+                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
+                ></div>
+                {{ t("common.loading") }}
+              </div>
+              <template v-else>
+                <div class="flex items-center justify-between">
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">{{
+                      t("admin.settings.keywordTempUnsched.enabled")
+                    }}</label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.keywordTempUnsched.enabledHint") }}
+                    </p>
+                  </div>
+                  <Toggle v-model="keywordTempUnschedForm.enabled" />
+                </div>
+                <div
+                  v-if="keywordTempUnschedForm.enabled"
+                  class="space-y-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{ t("admin.settings.keywordTempUnsched.keywords") }}
+                    </label>
+                    <textarea
+                      v-model="keywordTempUnschedKeywordsText"
+                      rows="4"
+                      class="input w-full font-mono text-sm"
+                    ></textarea>
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.keywordTempUnsched.keywordsHint") }}
+                    </p>
+                  </div>
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{ t("admin.settings.keywordTempUnsched.durationMinutes") }}
+                    </label>
+                    <input
+                      v-model.number="keywordTempUnschedForm.duration_minutes"
+                      type="number"
+                      min="1"
+                      max="120"
+                      class="input w-32"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t("admin.settings.keywordTempUnsched.durationMinutesHint")
+                      }}
+                    </p>
+                  </div>
+                </div>
+                <div
+                  class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <button
+                    type="button"
+                    @click="saveKeywordTempUnschedSettings"
+                    :disabled="keywordTempUnschedSaving"
+                    class="btn btn-primary btn-sm"
+                  >
+                    {{
+                      keywordTempUnschedSaving
+                        ? t("common.saving")
+                        : t("common.save")
+                    }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+
           <!-- Rate Limit Cooldown (429) Settings -->
           <div class="card">
             <div
@@ -9053,6 +9146,14 @@ const overloadCooldownForm = reactive({
   cooldown_minutes: 10,
 });
 
+const keywordTempUnschedLoading = ref(true);
+const keywordTempUnschedSaving = ref(false);
+const keywordTempUnschedForm = reactive({
+  enabled: false,
+  duration_minutes: 5,
+});
+const keywordTempUnschedKeywordsText = ref("currently overloaded");
+
 // Rate Limit Cooldown (429) 状态
 const rateLimit429CooldownLoading = ref(true);
 const rateLimit429CooldownSaving = ref(false);
@@ -11918,6 +12019,48 @@ async function saveOverloadCooldownSettings() {
   }
 }
 
+async function loadKeywordTempUnschedSettings() {
+  keywordTempUnschedLoading.value = true;
+  try {
+    const settings = await adminAPI.settings.getKeywordTempUnschedSettings();
+    keywordTempUnschedForm.enabled = settings.enabled;
+    keywordTempUnschedForm.duration_minutes = settings.duration_minutes;
+    keywordTempUnschedKeywordsText.value = (settings.keywords || []).join("\n");
+  } catch (_error: unknown) {
+    // Silent fail - settings will use defaults
+  } finally {
+    keywordTempUnschedLoading.value = false;
+  }
+}
+
+async function saveKeywordTempUnschedSettings() {
+  keywordTempUnschedSaving.value = true;
+  try {
+    const keywords = keywordTempUnschedKeywordsText.value
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    const updated = await adminAPI.settings.updateKeywordTempUnschedSettings({
+      enabled: keywordTempUnschedForm.enabled,
+      keywords,
+      duration_minutes: keywordTempUnschedForm.duration_minutes,
+    });
+    keywordTempUnschedForm.enabled = updated.enabled;
+    keywordTempUnschedForm.duration_minutes = updated.duration_minutes;
+    keywordTempUnschedKeywordsText.value = (updated.keywords || []).join("\n");
+    appStore.showSuccess(t("admin.settings.keywordTempUnsched.saved"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(
+        error,
+        t("admin.settings.keywordTempUnsched.saveFailed"),
+      ),
+    );
+  } finally {
+    keywordTempUnschedSaving.value = false;
+  }
+}
+
 // Panel API Rate Limit 方法
 async function loadPanelRateLimitSettings() {
   panelRateLimitLoading.value = true;
@@ -12662,6 +12805,7 @@ onMounted(() => {
   loadUpstreamBillingProbeSettings();
   loadOllamaCloudUsageSettings();
   loadOverloadCooldownSettings();
+  loadKeywordTempUnschedSettings();
   loadRateLimit429CooldownSettings();
   loadBurnPromoteSettings();
   loadPanelRateLimitSettings();
