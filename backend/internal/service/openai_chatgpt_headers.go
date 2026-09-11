@@ -49,9 +49,6 @@ func persistChatGPTAccountIDFromMemory(ctx context.Context, repo AccountReposito
 	if loaded, err := repo.GetByID(ctx, account.ID); err == nil && loaded != nil {
 		latest = loaded
 	}
-	if strings.TrimSpace(latest.GetCredential("chatgpt_account_id")) == id {
-		return
-	}
 	creds := latest.Credentials
 	if creds == nil {
 		creds = map[string]any{"chatgpt_account_id": id}
