@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
@@ -1742,7 +1743,18 @@ func (a *Account) GetChatGPTAccountID() string {
 	if !a.IsOpenAIOAuthLike() {
 		return ""
 	}
-	return a.GetCredential("chatgpt_account_id")
+	if id := strings.TrimSpace(a.GetCredential("chatgpt_account_id")); id != "" {
+		return id
+	}
+	id := openai.ChatGPTAccountIDFromTokens(a.GetCredential("id_token"), a.GetCredential("access_token"))
+	if id == "" {
+		return ""
+	}
+	if a.Credentials == nil {
+		a.Credentials = make(map[string]any, 1)
+	}
+	a.Credentials["chatgpt_account_id"] = id
+	return id
 }
 
 func (a *Account) IsChatGPTAccountFedRAMP() bool {

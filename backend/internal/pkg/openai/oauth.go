@@ -411,3 +411,21 @@ func (c *IDTokenClaims) GetUserInfo() *UserInfo {
 
 	return info
 }
+
+// ChatGPTAccountIDFromJWT 从 ChatGPT JWT payload 取出 chatgpt_account_id。
+// 使用 DecodeIDToken：不过期校验，导入/出站补头时 token 可能已过期但仍带 claim。
+func ChatGPTAccountIDFromJWT(token string) string {
+	claims, err := DecodeIDToken(strings.TrimSpace(token))
+	if err != nil || claims == nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.GetUserInfo().ChatGPTAccountID)
+}
+
+// ChatGPTAccountIDFromTokens 优先 id_token，其次 access_token。
+func ChatGPTAccountIDFromTokens(idToken, accessToken string) string {
+	if id := ChatGPTAccountIDFromJWT(idToken); id != "" {
+		return id
+	}
+	return ChatGPTAccountIDFromJWT(accessToken)
+}

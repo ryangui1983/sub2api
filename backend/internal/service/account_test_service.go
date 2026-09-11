@@ -849,6 +849,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	credentialAccount.ApplyHeaderOverrides(req.Header)
+	logRedactedOpenAIOutboundHeaders(ctx, "account_test", req.Header)
 
 	// Get proxy URL
 	proxyURL := ""

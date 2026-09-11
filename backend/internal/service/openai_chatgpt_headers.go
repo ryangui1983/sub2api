@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
+	"strings"
 )
 
 func setOpenAIChatGPTAccountHeaders(headers http.Header, account *Account) {
@@ -27,6 +29,37 @@ func resolveAndSetOpenAIChatGPTAccountHeaders(ctx context.Context, repo AccountR
 	if err != nil {
 		return err
 	}
+	missingStored := credAccount != nil && strings.TrimSpace(credAccount.GetCredential("chatgpt_account_id")) == ""
 	setOpenAIChatGPTAccountHeaders(headers, credAccount)
+	if missingStored && credAccount != nil && strings.TrimSpace(credAccount.GetChatGPTAccountID()) != "" {
+		persistChatGPTAccountIDFromMemory(ctx, repo, credAccount)
+	}
 	return nil
+}
+
+func persistChatGPTAccountIDFromMemory(ctx context.Context, repo AccountRepository, account *Account) {
+	if repo == nil || account == nil {
+		return
+	}
+	id := strings.TrimSpace(account.GetChatGPTAccountID())
+	if id == "" {
+		return
+	}
+	latest := account
+	if loaded, err := repo.GetByID(ctx, account.ID); err == nil && loaded != nil {
+		latest = loaded
+	}
+	if strings.TrimSpace(latest.GetCredential("chatgpt_account_id")) == id {
+		return
+	}
+	creds := latest.Credentials
+	if creds == nil {
+		creds = map[string]any{"chatgpt_account_id": id}
+	} else {
+		creds = shallowCopyMap(creds)
+		creds["chatgpt_account_id"] = id
+	}
+	if err := persistAccountCredentials(ctx, repo, latest, creds); err != nil {
+		slog.Warn("persist chatgpt_account_id failed", "account_id", account.ID, "error", err)
+	}
 }

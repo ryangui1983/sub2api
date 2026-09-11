@@ -203,6 +203,7 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 	}
 
 	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
+	fillOpenAIChatGPTAccountID(tokenInfo)
 
 	return tokenInfo, nil
 }
@@ -250,6 +251,7 @@ func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 	}
 
 	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
+	fillOpenAIChatGPTAccountID(tokenInfo)
 
 	return tokenInfo, nil
 }
@@ -391,6 +393,7 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 
 // BuildAccountCredentials builds credentials map from token info
 func (s *OpenAIOAuthService) BuildAccountCredentials(tokenInfo *OpenAITokenInfo) map[string]any {
+	fillOpenAIChatGPTAccountID(tokenInfo)
 	creds := map[string]any{
 		"access_token": tokenInfo.AccessToken,
 	}
@@ -445,4 +448,11 @@ func (s *OpenAIOAuthService) Stop() {
 
 func normalizeOpenAIOAuthPlatform(platform string) string {
 	return openai.OAuthPlatformOpenAI
+}
+
+func fillOpenAIChatGPTAccountID(tokenInfo *OpenAITokenInfo) {
+	if tokenInfo == nil || strings.TrimSpace(tokenInfo.ChatGPTAccountID) != "" {
+		return
+	}
+	tokenInfo.ChatGPTAccountID = openai.ChatGPTAccountIDFromTokens(tokenInfo.IDToken, tokenInfo.AccessToken)
 }

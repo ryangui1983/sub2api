@@ -1,6 +1,8 @@
 package openai
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/url"
 	"sync"
 	"testing"
@@ -58,5 +60,30 @@ func TestBuildAuthorizationURLForPlatform_OpenAI(t *testing.T) {
 	}
 	if got := q.Get("id_token_add_organizations"); got != "true" {
 		t.Fatalf("id_token_add_organizations mismatch: got=%q want=true", got)
+	}
+}
+
+func unsignedChatGPTJWT(accountID, userID string) string {
+	payload := map[string]any{
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id": accountID,
+			"chatgpt_user_id":    userID,
+		},
+	}
+	raw, _ := json.Marshal(payload)
+	return "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(raw) + ".sig"
+}
+
+func TestChatGPTAccountIDFromTokens(t *testing.T) {
+	idToken := unsignedChatGPTJWT("acct-id-token", "user-1")
+	accessToken := unsignedChatGPTJWT("acct-access-token", "user-1")
+	if got := ChatGPTAccountIDFromTokens(idToken, accessToken); got != "acct-id-token" {
+		t.Fatalf("prefer id_token: got=%q", got)
+	}
+	if got := ChatGPTAccountIDFromTokens("", accessToken); got != "acct-access-token" {
+		t.Fatalf("fallback access_token: got=%q", got)
+	}
+	if got := ChatGPTAccountIDFromTokens("", ""); got != "" {
+		t.Fatalf("empty tokens: got=%q", got)
 	}
 }
