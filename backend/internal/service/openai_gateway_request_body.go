@@ -695,15 +695,31 @@ func appendOpenAIResponsesRequestPathSuffix(baseURL, suffix string) string {
 }
 
 func (s *OpenAIGatewayService) replaceModelInResponseBody(body []byte, fromModel, toModel string) []byte {
-	// 使用 gjson/sjson 精确替换 model 字段，避免全量 JSON 反序列化
-	if m := gjson.GetBytes(body, "model"); m.Exists() && m.Str == fromModel {
-		newBody, err := sjson.SetBytes(body, "model", toModel)
-		if err != nil {
-			return body
-		}
-		return newBody
+	_ = fromModel
+	return rewriteOpenAIResponseModelFields(body, toModel)
+}
+
+// rewriteOpenAIResponseModelFields 把 JSON 里已声明的 model / response.model
+// 无条件改成 toModel。不能按「等于映射目标」精确匹配：Codex 上游常回内部实验
+// slug，和发出去的映射名不是同一个字符串。
+func rewriteOpenAIResponseModelFields(body []byte, toModel string) []byte {
+	toModel = strings.TrimSpace(toModel)
+	if len(body) == 0 || toModel == "" {
+		return body
 	}
-	return body
+	updated := body
+	for _, path := range []string{"model", "response.model"} {
+		m := gjson.GetBytes(updated, path)
+		if !m.Exists() || m.Type != gjson.String || m.Str == toModel {
+			continue
+		}
+		next, err := sjson.SetBytes(updated, path, toModel)
+		if err != nil {
+			continue
+		}
+		updated = next
+	}
+	return updated
 }
 
 func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any, requestedModel string) (value string, present bool) {

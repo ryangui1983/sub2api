@@ -87,24 +87,38 @@ func EnsureRequestedPublicModel(ctx context.Context, model string) context.Conte
 	return WithRequestedPublicModel(ctx, model)
 }
 
+func channelMappingHideInResponseEnabled(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v := ctx.Value(ctxkey.ChannelMappingHideInResponse)
+	enabled, ok := v.(bool)
+	return ok && enabled
+}
+
 func mappedResponseModel(ctx context.Context, forwardedModel string) string {
 	forwardedModel = strings.TrimSpace(forwardedModel)
-	if ctx == nil {
-		return forwardedModel
-	}
-	hide := false
-	if v := ctx.Value(ctxkey.ChannelMappingHideInResponse); v != nil {
-		if b, ok := v.(bool); ok {
-			hide = b
-		}
-	}
-	if !hide {
+	if !channelMappingHideInResponseEnabled(ctx) {
 		return forwardedModel
 	}
 	if model, ok := RequestedPublicModelFromContext(ctx); ok {
 		return model
 	}
 	return forwardedModel
+}
+
+// hideMappedResponseModelIfEnabled 在渠道映射开启 hide_in_response 时返回应回给
+// 下游的公开模型名。上游实际回的 slug 可能既不是请求名也不是映射目标
+// （例如 Codex 内部实验 ID），调用方必须无条件改写，而不是精确匹配映射目标。
+func hideMappedResponseModelIfEnabled(ctx context.Context, forwardedModel string) (string, bool) {
+	if !channelMappingHideInResponseEnabled(ctx) {
+		return "", false
+	}
+	clientModel := mappedResponseModel(ctx, forwardedModel)
+	if clientModel == "" {
+		return "", false
+	}
+	return clientModel, true
 }
 
 func CompositeRouteSourceFromContext(ctx context.Context) (string, bool) {

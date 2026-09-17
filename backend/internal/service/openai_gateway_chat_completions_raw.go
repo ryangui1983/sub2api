@@ -569,19 +569,27 @@ func clientFacingModel(c *gin.Context, forwardedModel string) string {
 }
 
 func hideMappedModelInChatJSON(c *gin.Context, body []byte, originalModel, billingModel, upstreamModel string) []byte {
-	toModel := clientFacingModel(c, "")
-	fromModel := firstNonEmpty(upstreamModel, billingModel, originalModel)
-	if toModel == "" || fromModel == "" || fromModel == toModel {
+	_ = billingModel
+	_ = upstreamModel
+	if c == nil || c.Request == nil {
 		return body
 	}
-	return (&OpenAIGatewayService{}).replaceModelInResponseBody(body, fromModel, toModel)
+	toModel, ok := hideMappedResponseModelIfEnabled(c.Request.Context(), originalModel)
+	if !ok {
+		return body
+	}
+	return rewriteOpenAIResponseModelFields(body, toModel)
 }
 
 func hideMappedModelInChatSSELine(c *gin.Context, line, originalModel, billingModel, upstreamModel string) string {
-	toModel := clientFacingModel(c, "")
-	fromModel := firstNonEmpty(upstreamModel, billingModel, originalModel)
-	if toModel == "" || fromModel == "" || fromModel == toModel {
+	_ = billingModel
+	_ = upstreamModel
+	if c == nil || c.Request == nil {
 		return line
 	}
-	return (&OpenAIGatewayService{}).replaceModelInSSELine(line, fromModel, toModel)
+	toModel, ok := hideMappedResponseModelIfEnabled(c.Request.Context(), originalModel)
+	if !ok {
+		return line
+	}
+	return (&OpenAIGatewayService{}).replaceModelInSSELine(line, "", toModel)
 }

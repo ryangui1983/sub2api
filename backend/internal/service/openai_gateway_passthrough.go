@@ -1983,7 +1983,13 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	defer putSSEScannerBuf64K(scanBuf)
 	documentScanner := newOpenAISSEJSONDocumentScanner(scanner)
 
-	needModelReplace := strings.TrimSpace(originalModel) != "" && strings.TrimSpace(mappedModel) != "" && strings.TrimSpace(originalModel) != strings.TrimSpace(mappedModel)
+	hideClientModel, hideMapped := hideMappedResponseModelIfEnabled(ctx, originalModel)
+	compactReplace := !hideMapped && strings.TrimSpace(originalModel) != "" && strings.TrimSpace(mappedModel) != "" && strings.TrimSpace(originalModel) != strings.TrimSpace(mappedModel)
+	needModelReplace := hideMapped || compactReplace
+	replaceToModel := originalModel
+	if hideMapped {
+		replaceToModel = hideClientModel
+	}
 	resultWithUsage := func() *openaiStreamingResultPassthrough {
 		return &openaiStreamingResultPassthrough{
 			usage:            usage,
@@ -2008,8 +2014,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			trimmedData := strings.TrimSpace(data)
 			rawEventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
 			observer.ObserveOpenAI(dataBytes, rawEventType)
-			if needModelReplace && strings.Contains(data, mappedModel) {
-				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
+			if needModelReplace {
+				line = s.replaceModelInSSELine(line, mappedModel, replaceToModel)
 				if replacedData, replaced := extractOpenAISSEDataLine(line); replaced {
 					dataBytes = []byte(replacedData)
 					trimmedData = strings.TrimSpace(replacedData)
@@ -2323,9 +2329,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if contentType == "" {
 		contentType = "application/json"
 	}
-	if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
-		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
-	}
+	body = s.rewritePassthroughDownstreamModelJSON(ctx, body, originalModel, mappedModel)
 	body, err = restoreOpenAIResponsesNamespacePayload(c, body)
 	if err != nil {
 		return nil, fmt.Errorf("restore OpenAI passthrough namespace response: %w", err)
@@ -2385,9 +2389,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		}
 		finalResponse = supplementCompactionItemFromSSE(c, finalResponse, bodyText)
 		body = finalResponse
-		if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
-			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
-		}
+		body = s.rewritePassthroughDownstreamModelJSON(c.Request.Context(), body, originalModel, mappedModel)
 		// Correct tool calls in final response
 		body = s.correctToolCallsInResponseBody(body)
 		restoredBody, restoreErr := restoreOpenAIResponsesNamespacePayload(c, body)
@@ -2397,9 +2399,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		restoredBody = restoreCodexToolNamesFromContext(c, restoredBody)
 		body = restoredBody
 	} else {
-		if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
-			bodyText = s.replaceModelInSSEBody(bodyText, mappedModel, originalModel)
-		}
+		bodyText = s.rewritePassthroughDownstreamModelSSE(c.Request.Context(), bodyText, originalModel, mappedModel)
 		body = []byte(bodyText)
 	}
 

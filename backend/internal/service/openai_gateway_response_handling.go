@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
@@ -337,17 +336,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		lastDownstreamWriteAt = time.Now()
 	}
 
-	// 根据 HideInResponse 标志决定是否需要改写模型名
-	// - HideInResponse = true：需要改写（隐藏映射，显示原始模型）
-	// - HideInResponse = false 或未设置：不改写（保持上游返回的模型名）
-	hideInResponse := false
-	if v := ctx.Value(ctxkey.ChannelMappingHideInResponse); v != nil {
-		if b, ok := v.(bool); ok {
-			hideInResponse = b
-		}
-	}
-	clientModel := mappedResponseModel(ctx, originalModel)
-	needModelReplace := hideInResponse && clientModel != "" && mappedModel != "" && clientModel != mappedModel
+	// HideInResponse：下游只能看到客户端请求名。上游可能回内部实验 slug，
+	// 不能要求它等于映射目标才改写。
+	clientModel, needModelReplace := hideMappedResponseModelIfEnabled(ctx, originalModel)
 
 	streamOutputAccumulator := apicompat.NewBufferedResponseAccumulator()
 	streamDoneItems := newResponsesStreamOutputItems()
@@ -674,9 +665,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				data = string(sanitizedData)
 				line = "data: " + data
 			}
-			// Replace model in response if needed.
-			// Fast path: most events do not contain model field values.
-			if needModelReplace && mappedModel != "" && strings.Contains(line, mappedModel) {
+			if needModelReplace {
 				line = s.replaceModelInSSELine(line, mappedModel, clientModel)
 			}
 			startsClientOutput := forceFlushFailedEvent || openAIStreamDataStartsClientOutput(data, eventType)
@@ -1082,6 +1071,7 @@ func effectiveOpenAISSEEventType(payload []byte, eventType string) string {
 }
 
 func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel string) string {
+	_ = fromModel
 	data, ok := extractOpenAISSEDataLine(line)
 	if !ok {
 		return line
@@ -1090,25 +1080,11 @@ func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel st
 		return line
 	}
 
-	// 使用 gjson 精确检查 model 字段，避免全量 JSON 反序列化
-	if m := gjson.Get(data, "model"); m.Exists() && m.Str == fromModel {
-		newData, err := sjson.Set(data, "model", toModel)
-		if err != nil {
-			return line
-		}
-		return "data: " + newData
+	newData := rewriteOpenAIResponseModelFields([]byte(data), toModel)
+	if bytes.Equal(newData, []byte(data)) {
+		return line
 	}
-
-	// 检查嵌套的 response.model 字段
-	if m := gjson.Get(data, "response.model"); m.Exists() && m.Str == fromModel {
-		newData, err := sjson.Set(data, "response.model", toModel)
-		if err != nil {
-			return line
-		}
-		return "data: " + newData
-	}
-
-	return line
+	return "data: " + string(newData)
 }
 
 // correctToolCallsInResponseBody 修正响应体中的工具调用
@@ -1636,17 +1612,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	usage := &usageValue
 	logOpenAISuccessMissingUsage(ctx, c, account, resp, usage, "json", false)
 
-	// 根据 HideInResponse 标志决定是否需要改写模型名
-	// - HideInResponse = true：需要改写（隐藏映射，显示原始模型）
-	// - HideInResponse = false 或未设置：不改写（保持上游返回的模型名）
-	hideInResponse := false
-	if v := ctx.Value(ctxkey.ChannelMappingHideInResponse); v != nil {
-		if b, ok := v.(bool); ok {
-			hideInResponse = b
-		}
-	}
-	clientModel := mappedResponseModel(ctx, originalModel)
-	if hideInResponse && clientModel != "" && mappedModel != "" && clientModel != mappedModel {
+	if clientModel, ok := hideMappedResponseModelIfEnabled(ctx, originalModel); ok {
 		body = s.replaceModelInResponseBody(body, mappedModel, clientModel)
 	}
 
@@ -1745,15 +1711,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 		}
 		finalResponse = supplementCompactionItemFromSSE(c, finalResponse, bodyText)
 		body = finalResponse
-		// 根据 HideInResponse 标志决定是否需要改写模型名
-		hideInResponse := false
-		if v := ctx.Value(ctxkey.ChannelMappingHideInResponse); v != nil {
-			if b, ok := v.(bool); ok {
-				hideInResponse = b
-			}
-		}
-		clientModel := mappedResponseModel(ctx, originalModel)
-		if hideInResponse && clientModel != "" && mappedModel != "" && clientModel != mappedModel {
+		if clientModel, ok := hideMappedResponseModelIfEnabled(ctx, originalModel); ok {
 			body = s.replaceModelInResponseBody(body, mappedModel, clientModel)
 		}
 		// Correct tool calls in final response
@@ -1773,14 +1731,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(ctx context.Context, resp *http.R
 		restoredBody = restoreCodexToolNamesFromContext(c, restoredBody)
 		body = restoredBody
 	} else {
-		hideInResponse := false
-		if v := ctx.Value(ctxkey.ChannelMappingHideInResponse); v != nil {
-			if b, ok := v.(bool); ok {
-				hideInResponse = b
-			}
-		}
-		clientModel := mappedResponseModel(ctx, originalModel)
-		if hideInResponse && clientModel != "" && mappedModel != "" && clientModel != mappedModel {
+		if clientModel, ok := hideMappedResponseModelIfEnabled(ctx, originalModel); ok {
 			bodyText = s.replaceModelInSSEBody(bodyText, mappedModel, clientModel)
 		}
 		body = []byte(bodyText)
@@ -2403,4 +2354,24 @@ func (s *OpenAIGatewayService) replaceModelInSSEBody(body, fromModel, toModel st
 		lines[i] = s.replaceModelInSSELine(line, fromModel, toModel)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (s *OpenAIGatewayService) rewritePassthroughDownstreamModelJSON(ctx context.Context, body []byte, originalModel, mappedModel string) []byte {
+	if toModel, ok := hideMappedResponseModelIfEnabled(ctx, originalModel); ok {
+		return s.replaceModelInResponseBody(body, mappedModel, toModel)
+	}
+	if strings.TrimSpace(originalModel) != "" && strings.TrimSpace(mappedModel) != "" && strings.TrimSpace(originalModel) != strings.TrimSpace(mappedModel) {
+		return s.replaceModelInResponseBody(body, mappedModel, originalModel)
+	}
+	return body
+}
+
+func (s *OpenAIGatewayService) rewritePassthroughDownstreamModelSSE(ctx context.Context, body, originalModel, mappedModel string) string {
+	if toModel, ok := hideMappedResponseModelIfEnabled(ctx, originalModel); ok {
+		return s.replaceModelInSSEBody(body, mappedModel, toModel)
+	}
+	if strings.TrimSpace(originalModel) != "" && strings.TrimSpace(mappedModel) != "" && strings.TrimSpace(originalModel) != strings.TrimSpace(mappedModel) {
+		return s.replaceModelInSSEBody(body, mappedModel, originalModel)
+	}
+	return body
 }
