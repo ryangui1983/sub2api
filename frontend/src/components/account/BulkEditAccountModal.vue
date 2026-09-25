@@ -644,6 +644,49 @@
         </div>
       </div>
 
+      <!-- Auto pause scheduling on expiry -->
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-auto-pause-on-expired-label"
+              class="input-label mb-0"
+              for="bulk-edit-auto-pause-on-expired-enabled"
+            >
+              {{ t('admin.accounts.autoPauseOnExpired') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.autoPauseOnExpiredDesc') }}
+            </p>
+          </div>
+          <input
+            v-model="enableAutoPauseOnExpired"
+            id="bulk-edit-auto-pause-on-expired-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-auto-pause-on-expired-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div v-if="enableAutoPauseOnExpired" id="bulk-edit-auto-pause-on-expired-body" class="mt-3">
+          <button
+            type="button"
+            id="bulk-edit-auto-pause-on-expired-toggle"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              autoPauseOnExpired ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+            @click="autoPauseOnExpired = !autoPauseOnExpired"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                autoPauseOnExpired ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <!-- Header Override (eligible API-key platforms + grok OAuth) -->
       <div v-if="allHeaderOverrideCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="flex items-center justify-between">
@@ -1803,6 +1846,7 @@ const enableBaseUrl = ref(false)
 const enableModelRestriction = ref(false)
 const enableCustomErrorCodes = ref(false)
 const enableInterceptWarmup = ref(false)
+const enableAutoPauseOnExpired = ref(false)
 const enableHeaderOverride = ref(false)
 const enableProxy = ref(false)
 const enableConcurrency = ref(false)
@@ -1848,6 +1892,7 @@ const modelMappings = ref<ModelMapping[]>([])
 const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
 const interceptWarmupRequests = ref(false)
+const autoPauseOnExpired = ref(false)
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
 const proxyId = ref<number | null>(null)
@@ -2214,6 +2259,10 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     credentialsChanged = true
   }
 
+  if (enableAutoPauseOnExpired.value) {
+    updates.auto_pause_on_expired = autoPauseOnExpired.value
+  }
+
   if (enableHeaderOverride.value) {
     // 后端使用 JSONB || merge 语义：关闭时显式写入 false + 空对象以清除旧配置
     credentials[HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY] = headerOverrideEnabled.value
@@ -2397,6 +2446,7 @@ const handleSubmit = async () => {
     enableModelRestriction.value ||
     enableCustomErrorCodes.value ||
     enableInterceptWarmup.value ||
+    enableAutoPauseOnExpired.value ||
     enableHeaderOverride.value ||
     enableProxy.value ||
     enableConcurrency.value ||
@@ -2546,6 +2596,7 @@ watch(
       enableModelRestriction.value = false
       enableCustomErrorCodes.value = false
       enableInterceptWarmup.value = false
+      enableAutoPauseOnExpired.value = false
       enableHeaderOverride.value = false
       enableProxy.value = false
       enableConcurrency.value = false
@@ -2585,6 +2636,7 @@ watch(
       selectedErrorCodes.value = []
       customErrorCodeInput.value = null
       interceptWarmupRequests.value = false
+      autoPauseOnExpired.value = false
       headerOverrideEnabled.value = false
       headerOverrideRows.value = []
       proxyId.value = null
