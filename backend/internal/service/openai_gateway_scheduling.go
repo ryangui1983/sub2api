@@ -1294,8 +1294,17 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	}
 
 	tryAcquireFromLoadMap := func(loadMap map[int64]*AccountLoadInfo) (*AccountSelectionResult, bool, error) {
+		// 粘性溢出时绑定账号的等待队列已满，再把它放进候选只会让请求排回同一条满队列，
+		// 白白消耗一次抢槽机会。这里只跳过 Layer 2 的抢槽，保留 candidates 以便
+		// Layer 3 在全池busy时仍能退回排队。
+		skipSpilloverSticky := func(accountID int64) bool {
+			return stickySpillover && accountID == stickyAccountID
+		}
 		var available []accountWithLoad
 		for _, acc := range candidates {
+			if skipSpilloverSticky(acc.ID) {
+				continue
+			}
 			loadInfo := loadMap[acc.ID]
 			if loadInfo == nil {
 				loadInfo = &AccountLoadInfo{AccountID: acc.ID}
@@ -1397,6 +1406,9 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			ordered = prioritizeOpenAICompactAccounts(ordered)
 		}
 		for _, acc := range ordered {
+			if stickySpillover && acc.ID == stickyAccountID {
+				continue
+			}
 			fresh := s.resolveFreshSchedulableOpenAIAccount(ctx, acc, platform, requestedModel, false, requiredCapability)
 			if fresh == nil {
 				continue

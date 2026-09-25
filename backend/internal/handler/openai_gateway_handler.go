@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // OpenAIGatewayHandler handles OpenAI API gateway requests
@@ -750,12 +751,21 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, slotResult := h.acquireOpenAIAccountSlotWithStickyReselect(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
 			if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
 				h.handleOpenAIProfitVetoExhausted(c, streamStarted, reqLog, profitVetoCount)
+				return
+			}
+			continue
+		}
+		if slotResult == openAISlotAcquireWaitQueueFull {
+			// 粘性账号等待队列在准入瞬间占满：账号健康、池中另有空闲账号，
+			// 排除该账号重选即可落回全池，不应把请求 429 拒掉。
+			if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
+				h.handleOpenAIStickyReselectExhausted(c, streamStarted, reqLog, profitVetoCount)
 				return
 			}
 			continue
@@ -1337,12 +1347,24 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, slotResult := h.acquireOpenAIAccountSlotWithStickyReselect(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
 			if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
 				h.handleOpenAIProfitVetoExhausted(c, streamStarted, reqLog, profitVetoCount)
+				return
+			}
+			continue
+		}
+		if slotResult == openAISlotAcquireWaitQueueFull {
+			// 粘性账号等待队列在准入瞬间占满：账号健康、池中另有空闲账号，
+			// 排除该账号重选即可落回全池，不应把请求 429 拒掉。
+			// 本端点是 Anthropic 线格式，耗尽文案按 Anthropic 错误体写出。
+			if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
+				h.handleStickyReselectExhaustedWithWriter(c, streamStarted, reqLog, profitVetoCount, func(status int, errType, _ string, message string) {
+					h.anthropicStreamingAwareError(c, status, errType, message, streamStarted)
+				})
 				return
 			}
 			continue
@@ -2072,6 +2094,16 @@ const (
 	// 未写任何响应；调用方应经 recordOpenAIProfitVeto 把该账号加入本请求排除集
 	// 后重新选号，全池耗尽由下一轮选号返回标准 no available accounts。
 	openAISlotAcquireProfitVetoed
+	// openAISlotAcquireWaitQueueFull：粘性账号的等待队列在准入前已被占满，
+	// 本次未取得槽位、未写任何响应。仅粘性重选路径（allowStickyReselect）
+	// 返回此态。
+	//
+	// 调度层 Layer 1 判定「还有等待位」与这里 IncrementAccountWaitCount 实际占位
+	// 不是原子的：Layer 1 放行后等待位可能已被并发请求抢走。此时账号本身健康、
+	// 池中另有大量空闲账号，直接回 429 会把本可调度的请求拒掉。调用方应把该
+	// 账号加入本请求排除集后重新选号——重选时调度层 isExcluded 会跳过粘性绑定，
+	// 请求落到 Layer 2 走全池。
+	openAISlotAcquireWaitQueueFull
 )
 
 // openAIWSTurnPricing 持有 WebSocket 连接内「当前 turn」的计费定价时刻。
@@ -2130,6 +2162,42 @@ func (h *OpenAIGatewayHandler) handleOpenAIProfitVetoExhausted(
 	h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", profitVetoExhaustedMessage, streamStarted)
 }
 
+// stickyReselectExhaustedMessage 是粘性重选次数耗尽时返回给客户端的文案。
+// 与利润否决耗尽不同：候选池并非不满足约束，而是连续多个账号的等待队列
+// 都在准入瞬间被占满——整池确实处于饱和排队状态。
+const stickyReselectExhaustedMessage = "No available accounts: all candidates are at concurrency limit"
+
+// handleOpenAIStickyReselectExhausted 在粘性重选预算耗尽时写出错误响应。
+// 收敛到 503「无可用账号」而不是 429：此时整池都在排队，属于容量不足，
+// 客户端应按无可用账号处理而非退避重试同一个粘性账号。
+func (h *OpenAIGatewayHandler) handleOpenAIStickyReselectExhausted(
+	c *gin.Context,
+	streamStarted bool,
+	reqLog *zap.Logger,
+	reselectCount int,
+) {
+	h.handleStickyReselectExhaustedWithWriter(c, streamStarted, reqLog, reselectCount, nil)
+}
+
+// handleStickyReselectExhaustedWithWriter 是上面的可定制写出变体。writeError 为
+// nil 时用 OpenAI 线格式；Anthropic 线格式的端点（/v1/messages）传入
+// anthropicStreamingAwareError，避免往 Anthropic 客户端回 OpenAI 形状的错误体。
+func (h *OpenAIGatewayHandler) handleStickyReselectExhaustedWithWriter(
+	c *gin.Context,
+	streamStarted bool,
+	reqLog *zap.Logger,
+	reselectCount int,
+	writeError openAISlotErrorWriter,
+) {
+	reqLog.Warn("openai.sticky_reselect_attempts_exhausted", zap.Int("sticky_reselect_count", reselectCount))
+	markOpsRoutingCapacityLimited(c)
+	if writeError != nil {
+		writeError(http.StatusServiceUnavailable, "api_error", "", stickyReselectExhaustedMessage)
+		return
+	}
+	h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", stickyReselectExhaustedMessage, streamStarted)
+}
+
 func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	c *gin.Context,
 	groupID *int64,
@@ -2139,7 +2207,23 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	streamStarted *bool,
 	reqLog *zap.Logger,
 ) (func(), openAISlotAcquireResult) {
-	return h.acquireOpenAIAccountSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, nil)
+	return h.acquireOpenAIAccountSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, nil, false)
+}
+
+// acquireOpenAIAccountSlotWithStickyReselect 供 OpenAI 各端点使用：粘性账号的
+// 等待队列占满时返回 openAISlotAcquireWaitQueueFull 而不是 429，调用方排除该
+// 账号重选即可落回全池。grok 路径继续用 acquireResponsesAccountSlot 保留原有
+// 429 语义，不参与粘性重选。
+func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlotWithStickyReselect(
+	c *gin.Context,
+	groupID *int64,
+	sessionHash string,
+	selection *service.AccountSelectionResult,
+	reqStream bool,
+	streamStarted *bool,
+	reqLog *zap.Logger,
+) (func(), openAISlotAcquireResult) {
+	return h.acquireOpenAIAccountSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, nil, true)
 }
 
 type openAISlotErrorWriter func(status int, errType, code, message string)
@@ -2147,6 +2231,9 @@ type openAISlotErrorWriter func(status int, errType, code, message string)
 // acquireOpenAIAccountSlot centralizes scheduler selection admission. The
 // optional error writer lets non-Responses endpoints retain their wire format
 // while sharing the same WaitPlan, cancellation, and release semantics.
+//
+// allowStickyReselect 控制粘性账号等待队列占满时的行为：false 沿用原 429 拒绝；
+// true 交给调用方排除重选（见 openAISlotAcquireWaitQueueFull）。
 func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	c *gin.Context,
 	groupID *int64,
@@ -2156,6 +2243,7 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	streamStarted *bool,
 	reqLog *zap.Logger,
 	writeError openAISlotErrorWriter,
+	allowStickyReselect bool,
 ) (func(), openAISlotAcquireResult) {
 	if writeError == nil {
 		writeError = func(status int, errType, code, message string) {
@@ -2232,10 +2320,23 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	if waitErr != nil {
 		reqLog.Warn("openai.account_wait_counter_increment_failed", zap.Int64("account_id", account.ID), zap.Error(waitErr))
 	} else if !canWait {
+		// 逐条保持 Info（仅控制台，不入库）。Warn 是 ops_system_logs 的入库闸门，
+		// 这条在粘性重选路径下每请求可能触发多次，直接提级会把高频噪声写进
+		// 已经背着 12 个索引的表；改为每分钟一条 Warn 汇总，长期信号不丢。
 		reqLog.Info("openai.account_wait_queue_full",
 			zap.Int64("account_id", account.ID),
 			zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
+			zap.Bool("sticky_reselect", allowStickyReselect),
 		)
+		logThrottled(reqLog, zapcore.WarnLevel, "openai.account_wait_queue_full.aggregate",
+			waitQueueFullLogPerMinute,
+			zap.Int64("account_id", account.ID),
+			zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
+			zap.Bool("sticky_reselect", allowStickyReselect),
+		)
+		if allowStickyReselect {
+			return nil, openAISlotAcquireWaitQueueFull
+		}
 		writeError(http.StatusTooManyRequests, "rate_limit_error", gatewayQueueFullCode, "Too many pending requests, please retry later")
 		return nil, openAISlotAcquireFailed
 	}
@@ -2259,6 +2360,12 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	)
 	if err != nil {
 		reqLog.Warn("openai.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		// 粘性等待超时：账号健康、只是槽位被占满，池中另有大量空闲账号。
+		// 排除该账号回全池重选，避免把已经等过一轮的请求直接 429 掉。
+		// 代价是放弃该会话的 prompt cache 亲和性，但请求能成功。
+		if allowStickyReselect && isAccountSlotWaitTimeout(err) {
+			return nil, openAISlotAcquireWaitQueueFull
+		}
 		status, errType, code, message := concurrencyErrorResponse(err, "account")
 		writeError(status, errType, code, message)
 		return nil, openAISlotAcquireFailed
