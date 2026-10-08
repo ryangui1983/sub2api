@@ -964,7 +964,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				return payload
 			}
 			requestModel, upstreamModel := usageMeta.turnModels("")
-			return replaceOpenAIWSMessageModel(payload, upstreamModel, requestModel)
+			toModel, rewrite := responseModelRewriteTarget(ctx, requestModel, upstreamModel)
+			if !rewrite {
+				return payload
+			}
+			return replaceOpenAIWSMessageModel(payload, upstreamModel, toModel)
 		},
 		restoreToolNames: func(payload []byte) []byte {
 			return restoreCodexToolNamesFromContext(c, payload)

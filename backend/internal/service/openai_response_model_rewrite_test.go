@@ -37,6 +37,14 @@ func TestReplaceModelInSSELineHidesInternalSlug(t *testing.T) {
 	require.Equal(t, "gpt-5.6-terra", gjson.Get(extractMustSSEData(t, got), "response.model").String())
 }
 
+func TestReplaceOpenAIWSMessageModelHidesInternalSlug(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"type":"response.created","response":{"model":"gpt-6-luna-exp-1p-arm2-codexswic-ev3"}}`)
+	got := replaceOpenAIWSMessageModel(body, "gpt-6-luna", "gpt-6.1-sol")
+	require.Equal(t, "gpt-6.1-sol", gjson.GetBytes(got, "response.model").String())
+}
+
 func TestHideMappedResponseModelIfEnabledRewritesInternalSlug(t *testing.T) {
 	t.Parallel()
 

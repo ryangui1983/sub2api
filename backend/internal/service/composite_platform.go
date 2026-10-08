@@ -121,6 +121,21 @@ func hideMappedResponseModelIfEnabled(ctx context.Context, forwardedModel string
 	return clientModel, true
 }
 
+// responseModelRewriteTarget 决定下游 model 字段要不要改、改成什么。
+// hide_in_response 开启时无条件改回客户端公开名，即使请求体已经被改成映射名
+// （original == mapped）。未开启隐藏时，仅在账号级映射导致两个名字不同时改回 original。
+func responseModelRewriteTarget(ctx context.Context, originalModel, mappedModel string) (toModel string, rewrite bool) {
+	if clientModel, hide := hideMappedResponseModelIfEnabled(ctx, originalModel); hide {
+		return clientModel, true
+	}
+	originalModel = strings.TrimSpace(originalModel)
+	mappedModel = strings.TrimSpace(mappedModel)
+	if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
+		return originalModel, true
+	}
+	return "", false
+}
+
 func CompositeRouteSourceFromContext(ctx context.Context) (string, bool) {
 	if ctx == nil {
 		return "", false

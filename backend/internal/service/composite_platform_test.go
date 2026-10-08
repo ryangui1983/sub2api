@@ -239,6 +239,26 @@ func TestMappedResponseModelKeepsMappedNameWhenHideDisabled(t *testing.T) {
 	require.Equal(t, "gpt-5.6-luna", mappedResponseModel(ctx, "gpt-5.6-luna"))
 }
 
+func TestResponseModelRewriteTargetHidesWhenOriginalEqualsMapped(t *testing.T) {
+	ctx := EnsureRequestedPublicModel(context.Background(), "gpt-6.1-sol")
+	ctx = context.WithValue(ctx, ctxkey.ChannelMappingHideInResponse, true)
+	toModel, rewrite := responseModelRewriteTarget(ctx, "gpt-6-luna", "gpt-6-luna")
+	require.True(t, rewrite)
+	require.Equal(t, "gpt-6.1-sol", toModel)
+}
+
+func TestResponseModelRewriteTargetKeepsAccountMappingWithoutHide(t *testing.T) {
+	toModel, rewrite := responseModelRewriteTarget(context.Background(), "gpt-6.1-sol", "gpt-6-luna")
+	require.True(t, rewrite)
+	require.Equal(t, "gpt-6.1-sol", toModel)
+}
+
+func TestResponseModelRewriteTargetSkipsWhenNamesMatchWithoutHide(t *testing.T) {
+	toModel, rewrite := responseModelRewriteTarget(context.Background(), "gpt-6-luna", "gpt-6-luna")
+	require.False(t, rewrite)
+	require.Empty(t, toModel)
+}
+
 func TestEnsureRequestedPublicModelDoesNotOverrideExisting(t *testing.T) {
 	ctx := WithRequestedPublicModel(context.Background(), "gpt-5.6-sol")
 	ctx = EnsureRequestedPublicModel(ctx, "gpt-5.6-luna")

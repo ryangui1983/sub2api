@@ -3324,11 +3324,11 @@ func TestReplaceModelInSSELine(t *testing.T) {
 			expected: `data: {"type":"response","response":{"id":"resp-1","model":"my-model","output":[]}}`,
 		},
 		{
-			name:     "model 不匹配时不替换",
+			name:     "model 不匹配时仍改写",
 			line:     `data: {"id":"chatcmpl-123","model":"gpt-3.5-turbo","choices":[]}`,
 			from:     "gpt-4o",
 			to:       "my-model",
-			expected: `data: {"id":"chatcmpl-123","model":"gpt-3.5-turbo","choices":[]}`,
+			expected: `data: {"id":"chatcmpl-123","model":"my-model","choices":[]}`,
 		},
 		{
 			name:     "无 model 字段时不替换",
@@ -3394,11 +3394,11 @@ func TestReplaceModelInSSELine(t *testing.T) {
 			expected: `data: {"id":"abc","object":"chat.completion.chunk","model":"alias","created":1234567890,"choices":[{"index":0,"delta":{"content":"hi"}}]}`,
 		},
 		{
-			name:     "顶层优先于嵌套：同时存在两个 model",
+			name:     "同时改写顶层和嵌套 model",
 			line:     `data: {"model":"gpt-4o","response":{"model":"gpt-4o"}}`,
 			from:     "gpt-4o",
 			to:       "replaced",
-			expected: `data: {"model":"replaced","response":{"model":"gpt-4o"}}`,
+			expected: `data: {"model":"replaced","response":{"model":"replaced"}}`,
 		},
 	}
 
@@ -3428,11 +3428,11 @@ func TestReplaceModelInSSEBody(t *testing.T) {
 			expected: "data: {\"model\":\"alias\",\"choices\":[]}\n\ndata: {\"model\":\"alias\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n",
 		},
 		{
-			name:     "无需替换的 body",
+			name:     "from 不匹配时仍改写 body 中的 model",
 			body:     "data: {\"model\":\"gpt-3.5-turbo\"}\n\ndata: [DONE]\n",
 			from:     "gpt-4o",
 			to:       "alias",
-			expected: "data: {\"model\":\"gpt-3.5-turbo\"}\n\ndata: [DONE]\n",
+			expected: "data: {\"model\":\"alias\"}\n\ndata: [DONE]\n",
 		},
 		{
 			name:     "混合 event 和 data 行",
@@ -3476,11 +3476,11 @@ func TestReplaceModelInResponseBody(t *testing.T) {
 			expected: `{"id":"chatcmpl-123","model":"alias","choices":[]}`,
 		},
 		{
-			name:     "model 不匹配不替换",
+			name:     "model 不匹配时仍改写",
 			body:     `{"id":"chatcmpl-123","model":"gpt-3.5-turbo","choices":[]}`,
 			from:     "gpt-4o",
 			to:       "alias",
-			expected: `{"id":"chatcmpl-123","model":"gpt-3.5-turbo","choices":[]}`,
+			expected: `{"id":"chatcmpl-123","model":"alias","choices":[]}`,
 		},
 		{
 			name:     "无 model 字段不替换",
