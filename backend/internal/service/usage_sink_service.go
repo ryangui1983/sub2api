@@ -101,8 +101,9 @@ func (s *UsageSinkService) Start() {
 	if s.cfg.Gateway.UsageSink.URL == "" {
 		return
 	}
-	s.wg.Add(1)
+	s.wg.Add(2)
 	go s.run()
+	go s.runCredits()
 }
 
 func (s *UsageSinkService) Stop() {

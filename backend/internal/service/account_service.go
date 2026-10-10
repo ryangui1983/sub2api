@@ -260,6 +260,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, fmt.Errorf("create account: %w", err)
 	}
+	notifyOpenAICreditsDiscovery(account)
 
 	// require_oauth_only 检查：apikey 类型账号不可加入限制分组
 	if account.Type == AccountTypeAPIKey && len(req.GroupIDs) > 0 {

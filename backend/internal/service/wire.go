@@ -221,6 +221,17 @@ func ProvideOpenAIQuotaAutoResetService(
 	return service
 }
 
+// ProvideOpenAICreditsRefreshService 对已有 Codex 点数的 OpenAI OAuth 母号每分钟重拉 /wham/usage。
+func ProvideOpenAICreditsRefreshService(
+	accountRepo AccountRepository,
+	quotaService *OpenAIQuotaService,
+	leaderLock LeaderLockCache,
+) *OpenAICreditsRefreshService {
+	service := NewOpenAICreditsRefreshService(accountRepo, quotaService, leaderLock)
+	service.Start()
+	return service
+}
+
 func ProvideAccountUsageService(
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
@@ -911,6 +922,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
 	ProvideOpenAIQuotaAutoResetService,
+	ProvideOpenAICreditsRefreshService,
 	ProvideGrokQuotaService,
 	ProvideCNProviderQuotaService,
 	ProvideCNProviderBalanceService,

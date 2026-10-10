@@ -692,6 +692,7 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			if refreshedCreds := s.refreshOAuthToken(ctx, account); refreshedCreds != nil {
 				_ = persistAccountCredentials(ctx, s.accountRepo, account, refreshedCreds)
 			}
+			notifyOpenAICreditsDiscovery(account)
 			item.Action = "created"
 			result.Created++
 			result.Items = append(result.Items, item)

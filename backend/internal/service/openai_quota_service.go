@@ -164,6 +164,20 @@ func NewOpenAIQuotaService(
 // OAuth account. Returns infraerrors so the handler layer can map them to
 // stable error codes / HTTP statuses.
 func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	return s.queryUsage(ctx, accountID, true)
+}
+
+// RefreshCreditsSnapshot re-reads /wham/usage and writes extra.codex_credits_snapshot.
+// It does not fetch reset-credit details and does not trigger auto-reset.
+func (s *OpenAIQuotaService) RefreshCreditsSnapshot(ctx context.Context, accountID int64) error {
+	usage, err := s.queryUsage(ctx, accountID, false)
+	if err != nil {
+		return err
+	}
+	return s.CacheCreditsSnapshot(ctx, accountID, usage)
+}
+
+func (s *OpenAIQuotaService) queryUsage(ctx context.Context, accountID int64, includeResetDetails bool) (*OpenAIQuotaUsage, error) {
 	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -213,6 +227,9 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 	}
 
 	payload.FetchedAt = time.Now().Unix()
+	if !includeResetDetails {
+		return &payload, nil
+	}
 	details := s.queryResetCreditDetails(callCtx, client, accessToken, chatGPTAccountID, fedRAMP, accountID)
 	if details != nil {
 		payload.autoResetCandidates = details.AutoResetCandidates
